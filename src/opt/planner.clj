@@ -1,5 +1,5 @@
 (ns opt.planner
-  (:use common.util)
+  (:require [common.util :refer [map->java-hash-map]])
   (:import [purpleOpt PurpleOpt]))
 
 (defn compute-suggestion
