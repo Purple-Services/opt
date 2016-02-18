@@ -827,7 +827,7 @@ public class PurpleOpt {
 			// get the first order, assumed to be the working order
 			HashMap<String, Object> order = (HashMap<String, Object>) orders.get(assigned_orders_keys.get(0));
 
-			// initialize the assigned order lat-lng as the first¡¡(working) order lat-lng
+			// initialize the assigned order lat-lng as the first (working) order lat-lng
 			Double order_lat = (Double) order.get("lat");
 			Double order_lng = (Double) order.get("lng");
 			
