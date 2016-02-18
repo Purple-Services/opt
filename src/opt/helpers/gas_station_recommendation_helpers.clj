@@ -1,11 +1,11 @@
 (ns opt.helpers.gas-station-recommendation-helpers
-  (:gen-class))
+  (:require [clj-http.client :as client]
+            [clojure.data.json :as json]
+            [clojure-polyline.core :as polyline])
+  (:import  (java.io File) (java.util Date))
+  )
 
-(import '(java.io File) '(java.util Date))
 
-(require '[clj-http.client :as client]
-         '[clojure.data.json :as json]
-         '[clojure-polyline.core :as polyline])
 
 (def station-data-file "stations.json")
 (def mapquest-box-step 2)

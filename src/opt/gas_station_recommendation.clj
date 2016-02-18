@@ -1,5 +1,4 @@
-(ns opt.gas-station-recommendation
-  (:gen-class))
+(ns opt.gas-station-recommendation)
 
 (require '[opt.helpers.gas-station-recommendation-helpers :as helpers])
 
