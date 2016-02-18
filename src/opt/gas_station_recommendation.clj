@@ -1,6 +1,5 @@
-(ns opt.gas-station-recommendation)
-
-(require '[opt.helpers.gas-station-recommendation-helpers :as helpers])
+(ns opt.gas-station-recommendation
+  (:require [opt.helpers.gas-station-recommendation-helpers :as helpers]))
 
 (defn update-local-stations-data
   "Update the local stations.json file used to comptute the suggestions."
