@@ -15,4 +15,3 @@ pom.xml.asc
 profiles.clj
 .hgignore
 .hg/
-*.json
