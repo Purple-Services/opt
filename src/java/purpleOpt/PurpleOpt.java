@@ -91,6 +91,7 @@ public class PurpleOpt {
           "status": (if verbose) [(String) the same as status in input],
         sorted_order_list: (if verbose) the list of orders internally sorted, given by order id's
         cluster_list: (if verbose) the list of order clusters, given by order id's
+        unprocessed_list: (if verbose) the list of unprocessed orders
     NOTE: an empty LinkedHashmap will be returned if there is no unassigned order
 	}
 	 */
@@ -173,6 +174,10 @@ public class PurpleOpt {
 		
 		// extract information from orders to outHashMap
 		outputUpdate(orders, outHashMap);
+		
+		// collect unprocessed orders
+		if (verbose_output)
+			outHashMap.put("unprocessed_list", sorted_orders);
 		
 		return outHashMap;
 	}
@@ -819,7 +824,7 @@ public class PurpleOpt {
 		return currTime;
 	}
 
-	/* For each valid courier, set their status (lat,lng,time) when they finish their already-assigned orders)
+	/* For each courier, set their status (lat,lng,time) when they finish their already-assigned orders)
 	 * If they have no assigned order, use their current status.
 	 * Related orders also get courier_id / courier_pos / etf
 	 */
@@ -829,21 +834,16 @@ public class PurpleOpt {
 			// get the courier by their key
 			HashMap<String, Object> courier = (HashMap<String, Object>) couriers.get(courier_key);
 			// get finish time/lat/lng
-			if((boolean)courier.get("valid")){
-				HashMap<String, Object> finish = computeFinishTimeLatLng(courier, orders, currTime, google_distance_saved);
-				// add entries to the existing couriers hashmap for later use
-				courier.put("finish_time", finish.get("finish_time"));
-				courier.put("finish_lat", finish.get("finish_lat"));
-				courier.put("finish_lng", finish.get("finish_lng"));
-			}
-			else{
-				courier.put("finish_time", null);
-				courier.put("finish_lat", null);
-				courier.put("finish_lng", null);
-			}
-		}
+			HashMap<String, Object> finish = computeFinishTimeLatLng(courier, orders, currTime, google_distance_saved);
+			// add entries to the existing couriers hashmap for later use
+			courier.put("finish_time", finish.get("finish_time"));
+			courier.put("finish_lat", finish.get("finish_lat"));
+			courier.put("finish_lng", finish.get("finish_lng"));
 
+		}
 	}
+
+	
 
 	/* --- go through the couriers and remove the invalid ones, because they cannot take orders --- */
 	@SuppressWarnings("unchecked")
@@ -861,18 +861,26 @@ public class PurpleOpt {
 
 		// exception handling for a courier without the field "valid" or is invalid, just in case
 		Boolean bValid = (Boolean) courier.get("valid");
+		// initialize assigned orders for the courier
+		List<String> assigned_orders_keys = new ArrayList<String>();
+		// if the courier is invalid but its first order is enroute or servicing, we should still compute this order's etf
 		if (bValid == null || (!bValid)) {
-			// initialize output hash map
-			HashMap<String,Object> outHashMap = new HashMap<>();
-			// put results into the output hashmap
-			outHashMap.put("finish_time", null);
-			outHashMap.put("finish_lat", null);
-			outHashMap.put("finish_lng", null);
-			return outHashMap;
+			// get the courier's total assigned orders
+			List<String> temp_list = (List<String>)courier.get("assigned_orders");
+			if (!temp_list.isEmpty()) {
+				HashMap<String,Object> firstOrder = (HashMap<String, Object>) orders.get(temp_list.get(0));
+				if ((firstOrder.get("status")).equals("enroute") || (firstOrder.get("status")).equals("servicing"))
+					assigned_orders_keys.add(temp_list.get(0));
+			}
+			// obtain get the first order of this courier for computing its etf
+			if(!((List<String>)courier.get("assigned_orders")).isEmpty())
+				assigned_orders_keys.add(((List<String>)courier.get("assigned_orders")).get(0));
+			
 		}
+		else
+			// get the courier's total assigned orders
+			assigned_orders_keys = (List<String>)courier.get("assigned_orders");
 		
-		// get the courier's current assigned orders
-		List<String> assigned_orders_keys = (List<String>)courier.get("assigned_orders");
 		// initialize lat lng to the courier's current lat lng
 		Double finish_lat = (Double)courier.get("lat");
 		Double finish_lng = (Double)courier.get("lng");
@@ -884,7 +892,7 @@ public class PurpleOpt {
 			// get the first order, assumed to be the working order
 			HashMap<String, Object> order = (HashMap<String, Object>) orders.get(assigned_orders_keys.get(0));
 
-			// initialize the assigned order lat-lng as the first¡¡(working) order lat-lng
+			// initialize the assigned order lat-lng as the first (working) order lat-lng
 			Double order_lat = (Double) order.get("lat");
 			Double order_lng = (Double) order.get("lng");
 			
@@ -899,10 +907,10 @@ public class PurpleOpt {
 					finish_time += iOrderServingTime(order) + not_connected_delay * 60;
 			}
 
-			// 
+			// update courier first order's etf and position
 			order.put("etf", finish_time);
 			order.put("courier_pos", new Long(1L));
-
+			
 			// process the remaining assigned orders
 			for (int i=1; i<assigned_orders_keys.size(); i++) { // i=1 means we start from the second order
 				// get the order
@@ -934,12 +942,24 @@ public class PurpleOpt {
 			finish_lat = order_lat;
 			finish_lng = order_lng;
 		}
+		
 		// initialize output hash map
 		HashMap<String,Object> outHashMap = new HashMap<>();
-		// put results into the output hashmap
-		outHashMap.put("finish_time", finish_time);
-		outHashMap.put("finish_lat", finish_lat);
-		outHashMap.put("finish_lng", finish_lng);
+
+		// return for invalid courier
+		if (bValid == null || (!bValid)) {
+			// put null results into the output hashmap
+			outHashMap.put("finish_time", null);
+			outHashMap.put("finish_lat", null);
+			outHashMap.put("finish_lng", null);
+		}
+		else{
+			// put results into the output hashmap
+			outHashMap.put("finish_time", finish_time);
+			outHashMap.put("finish_lat", finish_lat);
+			outHashMap.put("finish_lng", finish_lng);
+		}
+		
 		// output return
 		return outHashMap;
 	}
