@@ -1,0 +1,335 @@
+{
+	"verbose_output": true,
+	"human_time_format": true,
+	"current_time": "2015-12-10 14:18:30 PST",
+	"_comments": [
+			"5 couriers: C1 is disconnected/comppleted O0/serving O9/assigned to O2; C2,C5 are free; C4 assigned to O9a; C3 enroute O1/accepted O6/assigned to O6a",
+			"12 orders: O0 complete, O9 servicing, O1 enroute, O2, O6 accepted, O6a assigned; the rest: O2a,O2b,O3,04,04a,O5,O5a,O7,O8,O9a are unassigned", 
+			"O2,O2a,O2b are nearby, next to the Purple headquarter",
+			"O3 is in BevelyWood",
+			"O4 is far but due soon (i.e. urgent)",
+			"O4a is close to O4 (thus also far) but not urgent",
+			"O5 is far but not urgent",
+			"O5a is close to O5 and due even later",
+			"O7 is close to C3",
+			"O8 is close to C1",
+			"O9a is close to O9",
+			
+			"What should we expect:",
+			"C3 will not be analyze (too many assigned orders), all other couriers will be",
+			"O2,O2a,O2b are clustered and assigned to the same courier",
+			"O4,O4a do not cluster but should go to the same courier",
+			"O5,O5a go to the same courier, and O5a is placed before O5",
+			"O9 and O9a should NOT cluster because, from input, C1 is servicing O9 and C4 is assigned to O9a",
+			"orders in a cluster do not share the same courier_pos but rank one after another"
+		],
+	"couriers": 
+	{
+		"C1": 
+		{
+			"id": "C1",
+			"lat": 34.042440, "lng": -118.346771, "map": "http://maps.google.com/maps?q=34.042440,-118.346771",
+			"connected": false,
+			"zones":[1,2,3,4,5]
+		},
+		"C2": 
+		{
+			"id": "C2",
+			"lat": 34.062494, "lng": -118.428139, "map": "http://maps.google.com/maps?q=34.062494,-118.428139",
+			"connected": true,
+			"zones":[1,3,4,5]			
+		},
+		"C3": 
+		{
+			"id": "C3",
+			"lat": 34.049351, "lng": -118.440577, "map": "http://maps.google.com/maps?q=34.049351,-118.440577",
+			"connected": true,
+			"zones":[2,3,4,6]
+		},
+		"C4": 
+		{
+			"id": "C4",
+			"lat": 34.002694, "lng": -118.490790, "map": "http://maps.google.com/maps?q=33.982694,-118.460790",
+			"connected": true,
+			"zones":[1,2,3,5]
+		},
+		"C5":
+		{
+			"id": "C5",
+			"_comments": "this courier is remote from headquarter",
+			"lat": 34.102341, "lng": -118.509843, "map": "http://maps.google.com/maps?q=34.102341, -118.509843",
+			"connected": true,
+			"zones": [6,7]
+		}
+	},
+	"orders": 
+	{
+		"O0": 
+		{
+			"id": "O0",
+			"_comments:": "this order is completed, so it should not interfering with optimization",
+			"status": "complete",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.04805601398782, "lng": -118.43377105396729, "map": "http://maps.google.com/maps?q=34.04805601398782,-118.43377105396729",
+			"zone": 4,
+			"courier_id": "C1",
+			"target_time_start": "2015-12-10 13:10:44 PST",
+			"target_time_end": "2015-12-10 16:10:44 PST",
+			"status_times": 
+			{
+				"accepted": "2015-12-10 13:11:44 PST",
+				"enroute": "2015-12-10 13:14:12 PST",
+				"servicing":  "2015-12-10 13:31:12 PST",
+				"complete": "2015-12-10 13:51:31 PST"
+			}
+		},
+		"O1": 
+		{
+			"id": "O1",
+			"_comments:": "this order is en route, so it interferes with time computation",
+			"status": "enroute",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.060508472309026, "lng": -118.43754600578198, "map": "http://maps.google.com/maps?q=34.060508472309026,-118.43754600578198",
+			"zone": 1,
+			"courier_id": "C3",
+			"target_time_start": "2015-12-10 14:14:40 PST",
+			"target_time_end": "2015-12-10 17:14:40 PST",
+			"status_times": 
+			{
+				"assigned": "2015-12-10 14:15:30 PST",
+				"accepted": "2015-12-10 14:15:44 PST",
+				"enroute": "2015-12-10 14:17:12 PST"			
+			}
+		},
+		"O2": 
+		{
+			"id": "O2",
+			"_comments:": "O2 O2a O2b are three orders at the same place",
+			"status": "accepted",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.050508472309026, "lng": -118.43754600578198, "map": "http://maps.google.com/maps?q=34.050508472309026,-118.43754600578198",
+			"zone": 2,
+			"courier_id": "C1",
+			"target_time_start": "2015-12-10 14:15:20 PST",
+			"target_time_end":   "2015-12-10 17:15:20 PST",
+			"status_times": 
+			{
+				"assigned": "2015-12-10 14:15:50 PST",
+				"accepted": "2015-12-10 14:16:02 PST"
+			}
+		},
+		"O2a": 
+		{
+			"id": "O2a",
+			"status": "unassigned",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.050450642818845, "lng": -118.4375173077508, "map": "http://maps.google.com/maps?q=34.050450642818845,-118.4375173077508",
+			"zone": 2,
+			"courier_id": "",
+			"target_time_start": "2015-12-10 14:15:44 PST",
+			"target_time_end":   "2015-12-10 17:15:44 PST",
+			"status_times": 
+			{
+			}
+		},
+        "O2b": 
+		{
+			"id": "O2b",
+			"status": "unassigned",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.050450642818835, "lng": -118.4375173077510, "map": "http://maps.google.com/maps?q=34.050450642818835,-118.4375173077510",
+			"zone": 2,
+			"courier_id": "",
+			"target_time_start": "2015-12-10 14:15:54 PST",
+			"target_time_end":   "2015-12-10 17:15:54 PST",
+			"status_times": 
+			{
+				
+			}
+		},
+		"O3":
+		{
+			"id": "O3",
+			"status": "unassigned",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.045475, "lng": -118.396804, "map": "http://maps.google.com/maps?q=34.045475,-118.396804",
+			"zone": 4,
+			"courier_id": "",
+			"target_time_start": "2015-12-10 14:16:54 PST",
+			"target_time_end":   "2015-12-10 17:16:54 PST",
+			"status_times": 
+			{
+				
+			}
+		},
+		"O4":
+		{
+			"id": "O4",
+			"status": "unassigned",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.0024606, "lng": -118.4904273, "map": "http://maps.google.com/maps?q=34.0194606,-118.4914273",
+			"zone": 5,
+			"courier_id": "",
+			"target_time_start": "2015-12-10 12:30:54 PST",
+			"target_time_end":   "2015-12-10 15:30:54 PST",
+			"status_times":
+			{
+				
+			}
+		},
+		"O4a":
+		{
+			"id": "O4a",
+			"status": "unassigned",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.0004606, "lng": -118.4904481, "map": "http://maps.google.com/maps?q=34.0204606,-118.4904481",
+			"zone": 5,
+			"courier_id": "",
+			"target_time_start": "2015-12-10 14:13:28 PST",
+			"target_time_end": "2015-12-10 17:13:28 PST",
+			"status_times":
+			{
+				
+			}
+		},
+		"O5":
+	    {
+	    	"id": "O5",
+	    	"status": "unassigned",
+	    	"gas_type": "87",
+	    	"gallons": 10,
+	    	"lat": 34.1534576, "lng": -118.5587219, "map": "http://maps.google.com/maps?q=34.0834576,-118.4087219",
+	    	"zone": 6,
+	    	"courier_id": "",
+	    	"target_time_start": "2015-12-10 14:00:10 PST",
+	    	"target_time_end": "2015-12-10 17:00:10 PST",
+	    	"status_times":
+	    	{
+	    		
+	    	}
+	    },
+	    "O5a":
+	    {
+	    	"id": "O5a",
+	    	"status": "unassigned",
+	    	"gas_type": "87",
+	    	"gallons": 10,
+	    	"lat": 34.1023411, "lng": -118.5098431, "map": "http://maps.google.com/maps?q=34.1023411,-118.5098431",
+	    	"zone": 6,
+	    	"courier_id": "",
+	    	"target_time_start": "2015-12-10 14:17:23 PST",
+	    	"target_time_end": "2015-12-10 17:17:23 PST",
+	    	"status_times":
+	    	{
+	    		
+	    	}
+	    },
+	    "O6":
+	    {
+	    	"id" : "O6",
+	    	"status": "accepted",
+	    	"gas_type" : "87",
+	    	"gallons" : 10,
+	    	"lat": 34.060408472309026, "lng": -118.43764600578198, "map": "http://maps.google.com/maps?q=34.060408472309026,-118.43764600578198",
+			"zone": 1,
+			"courier_id": "C3",
+			"target_time_start": "2015-12-10 14:14:55 PST",
+			"target_time_end": "2015-12-10 15:14:55 PST",
+			"status_times": 
+			{
+				"assigned": "2015-12-10 14:15:10 PST",
+				"accepted": "2015-12-10 14:15:30 PST"
+			}
+	    },
+	    "O6a":
+	    {
+	    	"id" : "O6a",
+	    	"status": "assigned",
+	    	"gas_type" : "87",
+	    	"gallons" : 10,
+	    	"lat": 34.060405472309026, "lng": -118.43764200578198, "map": "http://maps.google.com/maps?q=34.060405472309026,-118.43764200578198",
+			"zone": 1,
+			"courier_id": "C3",
+			"target_time_start": "2015-12-10 14:15:05 PST",
+			"target_time_end": "2015-12-10 15:15:05 PST",
+			"status_times": 
+			{
+				"assigned": "2015-12-10 14:15:25 PST"
+			}
+	    },
+	    "O7":
+	    {
+	    	"id" : "O7",
+	    	"status": "unassigned",
+	    	"gas_type" : "87",
+	    	"gallons" : 10,
+	    	"lat": 34.061405472309026, "lng": -118.43664200578198, "map": "http://maps.google.com/maps?q=34.061405472309026,-118.43664200578198",
+			"zone": 1,
+			"courier_id": "",
+			"target_time_start": "2015-12-10 14:15:55 PST",
+			"target_time_end": "2015-12-10 17:15:55 PST",
+			"status_times": 
+			{
+			}
+	    },
+	    "O8": 
+		{
+			"id": "O8",
+			"status": "unassigned",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.042540, "lng": -118.346871, "map": "http://maps.google.com/maps?q=34.042540,-118.346871",
+			"zone": 2,
+			"courier_id": "",
+			"target_time_start": "2015-12-10 14:16:05 PST",
+			"target_time_end":   "2015-12-10 17:16:05 PST",
+			"status_times": 
+			{
+			}
+		},
+		"O9": 
+		{
+			"id": "O9",
+			"status": "servicing",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.042440, "lng": -118.346771, "map": "http://maps.google.com/maps?q=34.042440,-118.346771",
+			"zone": 2,
+			"courier_id": "C1",
+			"target_time_start": "2015-12-10 14:00:05 PST",
+			"target_time_end":   "2015-12-10 15:00:05 PST",
+			"status_times": 
+			{
+				"assigned": "2015-12-10 14:00:35 PST",
+				"accepted": "2015-12-10 14:00:55 PST",
+				"enroute" : "2015-12-10 14:01:30 PST",
+				"servicing": "2015-12-10 14:18:00 PST"
+			}
+		},
+		"O9a": 
+		{
+			"id": "O9a",
+			"status": "assigned",
+			"gas_type": "87",
+			"gallons": 10,
+			"lat": 34.042430, "lng": -118.346770, "map": "http://maps.google.com/maps?q=34.042430,-118.346770",
+			"zone": 2,
+			"courier_id": "C4",
+			"target_time_start": "2015-12-10 14:10:05 PST",
+			"target_time_end":   "2015-12-10 17:10:05 PST",
+			"status_times": 
+			{
+			}
+		}
+				 	    
+	    
+	}
+}
