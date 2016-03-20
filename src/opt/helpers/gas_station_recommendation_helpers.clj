@@ -17,6 +17,14 @@
 
 (defn gen-grids [br-lat br-lng tl-lat tl-lng] (gen-grids-helper br-lat br-lng tl-lat tl-lng br-lng []))
 
+(defn remove-stations-wo-91 [stations]
+  ;; TODO: implement me.
+  )
+
+(defn remove-stations-non-toptier [stations]
+  ;; TODO: implement me.
+  )
+
 (defn get-los-angeles-stations 
   [br-lat br-lng tl-lat tl-lng]
   (try
@@ -25,7 +33,9 @@
         client/get
         :body
         json/read-str
-        (get "results"))
+        (get "results")
+        remove-stations-wo-91
+        remove-stations-non-toptier)
     (catch Exception e (get-los-angeles-stations br-lat br-lng tl-lat tl-lng))))
 
 (defn into-unique-id
