@@ -25,6 +25,32 @@
   ;; TODO: implement me.
 ;;  )
 
+(defn is-top-tier?
+  [station]
+  (or 
+    (.contains (.toLowerCase (:brand station)) "76")
+    (.contains (.toLowerCase (:brand station)) "aloha")
+    (.contains (.toLowerCase (:brand station)) "arco")
+    (.contains (.toLowerCase (:brand station)) "beacon")
+    (.contains (.toLowerCase (:brand station)) "bp")
+    (.contains (.toLowerCase (:brand station)) "chevron")
+    (.contains (.toLowerCase (:brand station)) "cenex")
+    (.contains (.toLowerCase (:brand station)) "conoco")
+    (.contains (.toLowerCase (:brand station)) "costco")
+    (.contains (.toLowerCase (:brand station)) "countrymark")
+    (.contains (.toLowerCase (:brand station)) "shamrock")
+    (.contains (.toLowerCase (:brand station)) "entec")
+    (.contains (.toLowerCase (:brand station)) "exxon")
+    (.contains (.toLowerCase (:brand station)) "mobil")
+    (.contains (.toLowerCase (:brand station)) "ohana")
+    (.contains (.toLowerCase (:brand station)) "66")
+    (.contains (.toLowerCase (:brand station)) "quiktrip")
+    (.contains (.toLowerCase (:brand station)) "shell")
+    (.contains (.toLowerCase (:brand station)) "sinclair")
+    (.contains (.toLowerCase (:brand station)) "texaco")
+    (.contains (.toLowerCase (:brand station)) "valero")
+    (.contains (.toLowerCase (:brand station)) "kwik")))
+
 (defn get-los-angeles-stations-with-price 
   [br-lat br-lng tl-lat tl-lng]
   (try
@@ -141,22 +167,31 @@
     (do (spit station-data-file (json/write-str station-data))
         station-data)))
 
+;; TODO: test me.
 (defn remove-blacklisted-stations
   [stations blacklist]
   (filter 
     (fn [station]
-     (not-any? (fn [bl-item]
-      (= bl-item (:id station)))))
+     (not-any? 
+      (fn [bl-item]
+        (= bl-item (:id station)))
+      blacklist))
     stations)
   )
+
+(defn remove-non-toptier-stations
+  [stations]
+  (filter is-top-tier? stations))
 
 (defn gas-stations 
   [opt]
   ;; (if (> -604800000 (- (.lastModified (File. station-data-file)) (.getTime (Date.))))
   ;;   (update-local-stations-file)
-  (remove-blacklisted-stations (json/read-str (slurp station-data-file) :key-fn keyword) (:blacklist opt))
-  ;;)
-  )
+  (->
+    (json/read-str (slurp station-data-file) :key-fn keyword)
+    remove-non-toptier-stations
+    (remove-blacklisted-stations (:blacklist opt))
+  ))
 
 (defn goog-request-route [src-lng src-lat dst-lng dst-lat] 
   (json/read-str (:body (client/get (str "https://maps.googleapis.com/maps/api/directions/json?origin=" src-lat "," src-lng "&destination=" dst-lat "," dst-lng "&sensor=false&key=" google-api-key))) :key-fn keyword))
