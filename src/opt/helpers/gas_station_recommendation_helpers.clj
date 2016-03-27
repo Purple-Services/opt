@@ -256,6 +256,33 @@
                                               (:lat station)))})
          suggested-stations)))
 
+(defn cumulative-avg
+  [numbers]
+  (:avg
+    (reduce
+      (fn
+        [coll elem]
+        (let [i (:i coll) avg (:avg coll)]
+          {:i (inc i) 
+           :avg (+ (* (/ i (inc i)) avg) (/ elem (inc i)))}))
+      {:i 1 :avg (first numbers)}
+      (drop 1 numbers))))
+
+(defn suggest-gas-stations-with-score 
+  [src-lng src-lat dst-lng dst-lat opt] 
+  (let [suggested-stations (suggest-gas-stations src-lng src-lat dst-lng dst-lat opt)]
+    (map (fn [station]
+           {:station station
+            :total-driving-time
+            (goog-resp->driving-time
+             (goog-request-route-with-station src-lng
+                                              src-lat
+                                              dst-lng
+                                              dst-lat
+                                              (:lng station)
+                                              (:lat station)))})
+         suggested-stations)))
+
 (defn compute-distance
   [station1 station2]
   (Math/sqrt
