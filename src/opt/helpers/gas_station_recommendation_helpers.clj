@@ -256,4 +256,23 @@
                                               (:lat station)))})
          suggested-stations)))
 
+(defn compute-distance
+  [station1 station2]
+  (Math/sqrt
+    (+ 
+      (* (- (:lat station1) (:lat station2)) (- (:lat station1) (:lat station2)))
+      (* (- (:lng station1) (:lng station2)) (- (:lng station1) (:lng station2))))))
 
+(defn suggest-gas-stations-near
+  [src-lng src-lat opt]
+  (take 20
+    (sort-by 
+      :distance
+      <
+      (map
+        (fn [station]
+          {
+            :station station
+            :distance (compute-distance station {:lat src-lat :lng src-lng})
+            })
+        (gas-stations opt)))))
