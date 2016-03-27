@@ -15,8 +15,8 @@
 
    Sample output: [{:station {...} :total-driving-time 2424},
                    {:station {...} :total-driving-time 4242}]"
-  ([src-lat src-lng opt]
-    (helpers/suggest-gas-stations-near src-lng src-lat opt))
+  ; ([src-lat src-lng opt]
+  ;   (helpers/suggest-gas-stations-near src-lng src-lat opt))
   ([src-lat src-lng dst-lat dst-lng opt]
     (helpers/suggest-gas-stations-with-driving-time src-lng src-lat dst-lng dst-lat opt)))
 
