@@ -153,7 +153,8 @@
   (let [id (get-station-id-no-price station-no-price)]
     (if-not 
       (some (fn [station] (= (:id station) id)) coll)
-      (conj coll (generate-station-object-no-price station-no-price)))))
+      (conj coll (generate-station-object-no-price station-no-price))
+      coll)))
 
 (defn generate-json-object
   [stations-with-price stations-all] 
@@ -268,20 +269,56 @@
       {:i 1 :avg (first numbers)}
       (drop 1 numbers))))
 
+(defn get-station-reg-price
+  [station]
+  (let [price (first (filter (fn [elem] (= (:type elem) "Regular")) (:prices station)))]
+    (if
+      price
+      (read-string (:price price))
+      nil)))
+
+(defn avg-gasprice-reg
+  [stations]
+  (cumulative-avg
+    (reduce
+      (fn 
+        [coll elem]
+        (if
+          (get-station-reg-price elem)
+          (conj
+            coll
+            (get-station-reg-price elem))
+          coll))
+      []
+      stations)))
+
 (defn suggest-gas-stations-with-score 
-  [src-lng src-lat dst-lng dst-lat opt] 
-  (let [suggested-stations (suggest-gas-stations src-lng src-lat dst-lng dst-lat opt)]
-    (map (fn [station]
-           {:station station
-            :total-driving-time
-            (goog-resp->driving-time
-             (goog-request-route-with-station src-lng
-                                              src-lat
-                                              dst-lng
-                                              dst-lat
-                                              (:lng station)
-                                              (:lat station)))})
-         suggested-stations)))
+  [src-lng src-lat dst-lng dst-lat opt]
+  (let [results (suggest-gas-stations-with-driving-time src-lng src-lat dst-lng dst-lat opt) avg (avg-gasprice-reg (gas-stations opt))]
+    (->>
+      (map
+        (fn [elem]
+          (assoc elem :price-modifier
+            (if (get-station-reg-price (:station elem))
+              (/ (get-station-reg-price (:station elem)) avg)
+              1.0)))
+        results)
+      (map 
+        (fn [elem]
+          (assoc elem :arco-modifier
+            (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
+              0.8
+              1.0))
+        ))
+      (map
+        (fn [elem]
+          ; (println elem)
+          (assoc elem :score
+            (*
+              (:total-driving-time elem)
+              (:price-modifier elem)
+              (:arco-modifier elem))))
+        ))))
 
 (defn compute-distance
   [station1 station2]
@@ -290,16 +327,38 @@
       (* (- (:lat station1) (:lat station2)) (- (:lat station1) (:lat station2)))
       (* (- (:lng station1) (:lng station2)) (- (:lng station1) (:lng station2))))))
 
-(defn suggest-gas-stations-near
+(defn suggest-gas-stations-near-with-score
   [src-lng src-lat opt]
-  (take 20
-    (sort-by 
-      :distance
-      <
-      (map
-        (fn [station]
-          {
-            :station station
-            :distance (compute-distance station {:lat src-lat :lng src-lng})
-            })
-        (gas-stations opt)))))
+      (->>
+        (take 20
+          (sort-by 
+            :distance
+            <
+            (map
+              (fn [station]
+                {
+                  :station station
+                  :distance (compute-distance station {:lat src-lat :lng src-lng})
+                  })
+              (gas-stations opt))))
+        (map
+          (fn [elem]
+            (assoc elem :price-modifier
+              (if (get-station-reg-price (:station elem))
+                (/ (get-station-reg-price (:station elem)) (avg-gasprice-reg (gas-stations opt)))
+                1.0))))
+        (map 
+          (fn [elem]
+            (assoc elem :arco-modifier
+              (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
+                0.8
+                1.0))))
+        (map
+          (fn [elem]
+            ; (println elem)
+            (assoc elem :score
+              (*
+                1000
+                (:distance elem)
+                (:price-modifier elem)
+                (:arco-modifier elem)))))))

@@ -11,14 +11,14 @@
 (defn compute-suggestions
   "Take the lat/lng of source and destination (optional) and returns a list of
    suggested stations and their total driving time. The output will be sorted
-   by their driving time in descending order.
+   by their score in descending order. The LOWER the score the better.
 
    Sample output: [{:station {...} :total-driving-time 2424},
                    {:station {...} :total-driving-time 4242}]"
   ([src-lat src-lng opt]
-    (helpers/suggest-gas-stations-near src-lng src-lat opt))
+    (helpers/suggest-gas-stations-near-with-score src-lng src-lat opt))
   ([src-lat src-lng dst-lat dst-lng opt]
-    (helpers/suggest-gas-stations-with-driving-time src-lng src-lat dst-lng dst-lat opt)))
+    (helpers/suggest-gas-stations-with-score src-lng src-lat dst-lng dst-lat opt)))
 
 
 
