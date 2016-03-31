@@ -5,11 +5,11 @@
   (:import  [java.io File]
             [java.util Date]))
 
-(def station-data-file "stations.json")
+(def station-data-file "stations.json") ;; comment: put "LA" and "gas" somewhere; next consider making a key-value pair like: LA: "parameters to get LA gas stations from mapquest" so it will be easier for us to turn on another city
 (def mapquest-box-step 2)
-(def google-api-key "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE")
+(def google-api-key "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE") ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
 
-(defn gen-grids-helper [br-lat br-lng tl-lat tl-lng og-lng coll]
+(defn gen-grids-helper [br-lat br-lng tl-lat tl-lng og-lng coll] ;; please define the abbr and add some English to explain what you do here
   (cond 
     (>= br-lat tl-lat) coll
     (>= br-lng tl-lng) (gen-grids-helper (+ mapquest-box-step br-lat) og-lng tl-lat tl-lng og-lng coll)
@@ -25,7 +25,7 @@
   ;; TODO: implement me.
 ;;  )
 
-(defn is-top-tier?
+(defn is-top-tier?  ;; comment: doing (.contains (.toLowerCase (:brand station)) to each brand repeatedly; low efficiency?
   [station]
   (or 
     (.contains (.toLowerCase (:brand station)) "76")
@@ -51,7 +51,7 @@
     (.contains (.toLowerCase (:brand station)) "valero")
     (.contains (.toLowerCase (:brand station)) "kwik")))
 
-(defn get-los-angeles-stations-with-price 
+(defn get-los-angeles-stations-with-price    ;; comment: make this for a generic city, not just for los angeles
   [br-lat br-lng tl-lat tl-lng]
   (try
     (-> (str "http://gasprices.mapquest.com/services/v1/stations?hits=4000&"
@@ -62,7 +62,7 @@
         (get "results"))
     (catch Exception e (get-los-angeles-stations-with-price br-lat br-lng tl-lat tl-lng))))
 
-(defn get-los-angeles-stations-all 
+(defn get-los-angeles-stations-all   ;; comment: maybe make 8000 an input or a constant that's easier to change?
   [br-lat br-lng tl-lat tl-lng]
   (try
     (-> (str "http://services.aws.mapquest.com/v1/search?"
@@ -74,7 +74,7 @@
         (get "results"))
     (catch Exception e (get-los-angeles-stations-all br-lat br-lng tl-lat tl-lng))))
 
-(defn into-unique-id
+(defn into-unique-id    ;; comment: add some English please
   [s1, coll]
   (reduce
    (fn [acc el]
@@ -99,13 +99,13 @@
 ;           []
 ;           (gen-grids 33.0 -119.0 35.0 -117.0)))
 
-(defn lnglat-to-block-id
+(defn lnglat-to-block-id   ;; comment: will this work for all cities uniformly? Also, lat and lng are easily mistaken, so let's always put lat before lng everywhere including in names
   [lng lat]
   (+ (+ 9000 (int (Math/floor (* 100 lat))))
      (* 18000 (+ 18000 (int (Math/floor (* 100 lng)))))))
 
 (defn get-station-street [station] (get-in station ["GeoAddress" "Street"]))
-(defn get-station-lng [station] (get-in station ["GeoAddress" "LatLng" "Lng"]))
+(defn get-station-lng [station] (get-in station ["GeoAddress" "LatLng" "Lng"]))  ;; comment: put next line before this line
 (defn get-station-lat [station] (get-in station ["GeoAddress" "LatLng" "Lat"]))
 (defn get-station-brand [station] (get-in station ["name"]))
 (defn get-station-side-of-street [station] (get-in station ["GeoAddress" "SideOfStreet"]))
@@ -169,7 +169,7 @@
         station-data)))
 
 ;; TODO: test me.
-(defn remove-blacklisted-stations
+(defn remove-blacklisted-stations   ;; comment: does filter parallelize like in map-reduce? I am concerned about the efficiency once black list becomes long
   [stations blacklist]
   (filter 
     (fn [station]
@@ -191,10 +191,10 @@
   (->
     (json/read-str (slurp station-data-file) :key-fn keyword)
     remove-non-toptier-stations
-    (remove-blacklisted-stations (:blacklist opt))
+    (remove-blacklisted-stations (:blacklist opt))   ;; comment: I expect blacklist to be stable. so, create a file with the blacklisted stations excluded. when the blacklist is updated, update the file. this will reduce the call to remove
   ))
 
-(defn goog-request-route [src-lng src-lat dst-lng dst-lat] 
+(defn goog-request-route [src-lng src-lat dst-lng dst-lat]   ;; comment: I haven't checked, but make sure to use "duration-in-traffic"
   (json/read-str (:body (client/get (str "https://maps.googleapis.com/maps/api/directions/json?origin=" src-lat "," src-lng "&destination=" dst-lat "," dst-lng "&sensor=false&key=" google-api-key))) :key-fn keyword))
 
 (defn goog-resp->simple-polyline
