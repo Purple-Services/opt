@@ -219,6 +219,7 @@
                                              (:latitude point)))
              polyline)))
 
+;; comment: what is the input "opt"? the blacklist?
 (defn suggest-gas-stations 
   ([polyline opt] (filter (fn [station] (contains? (into #{} (map (fn [point] (lnglat-to-block-id (:longitude point) (:latitude point))) polyline)) (:block_id station))) (gas-stations opt)))
   ([src-lng src-lat dst-lng dst-lat opt] (suggest-gas-stations (get-route-polyline src-lng src-lat dst-lng dst-lat) opt)))
