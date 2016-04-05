@@ -8,6 +8,7 @@
 (def station-data-file "stations.json") ;; comment: put "LA" and "gas" somewhere; next consider making a key-value pair like: LA: "parameters to get LA gas stations from mapquest" so it will be easier for us to turn on another city
 (def mapquest-box-step 2)
 (def google-api-key "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE") ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
+(def gas-stations-atom (atom {}))
 (def avg-gasprice-reg-atom (atom 0))
 (defn gen-grids-helper [br-lat br-lng tl-lat tl-lng og-lng coll] ;; please define the abbr and add some English to explain what you do here
   (cond 
@@ -184,8 +185,8 @@
   [stations]
   (filter is-top-tier? stations))
 
-(defn gas-stations 
-  [opt]
+(defn gas-stations-helper
+  [_ opt]
   ;; (if (> -604800000 (- (.lastModified (File. station-data-file)) (.getTime (Date.))))
   ;;   (update-local-stations-file)
   (->
@@ -193,6 +194,14 @@
     remove-non-toptier-stations
     (remove-blacklisted-stations (:blacklist opt))   ;; comment: I expect blacklist to be stable. so, create a file with the blacklisted stations excluded. when the blacklist is updated, update the file. this will reduce the call to remove
   ))
+
+(defn gas-stations
+  [opt]
+  (do
+    (if
+      (empty? @gas-stations-atom)
+      (swap! gas-stations-atom gas-stations-helper opt))
+    @gas-stations-atom))
 
 (defn goog-request-route [src-lng src-lat dst-lng dst-lat]   ;; comment: I haven't checked, but make sure to use "duration-in-traffic"
   (json/read-str (:body (client/get (str "https://maps.googleapis.com/maps/api/directions/json?origin=" src-lat "," src-lng "&destination=" dst-lat "," dst-lng "&sensor=false&key=" google-api-key))) :key-fn keyword))
@@ -221,7 +230,20 @@
 
 ;; comment: what is the input "opt"? the blacklist?
 (defn suggest-gas-stations 
-  ([polyline opt] (filter (fn [station] (contains? (into #{} (map (fn [point] (lnglat-to-block-id (:longitude point) (:latitude point))) polyline)) (:block_id station))) (gas-stations opt)))
+  ([polyline opt]
+    (filter
+      (fn [station]
+        (contains?
+          (into
+            #{}
+            (map
+              (fn [point]
+                (lnglat-to-block-id
+                  (:longitude point)
+                  (:latitude point)))
+              polyline))
+          (:block_id station)))
+      (gas-stations opt)))
   ([src-lng src-lat dst-lng dst-lat opt] (suggest-gas-stations (get-route-polyline src-lng src-lat dst-lng dst-lat) opt)))
 
 (defn count-viable-stations 
@@ -265,8 +287,8 @@
   (let [suggested-stations (suggest-gas-stations src-lng src-lat dst-lng dst-lat opt)]
     (map (fn [station]
            {:station station
-            :total-driving-time (driving-time-between src-lat src-lng dst-lat dst-lng (:lat station) (:lng station) {})}
-         suggested-stations))))
+            :total-driving-time (driving-time-between src-lat src-lng dst-lat dst-lng (:lat station) (:lng station) {})})
+         suggested-stations)))
 
 (defn cumulative-avg
   [_ numbers]
@@ -326,8 +348,7 @@
           (assoc elem :arco-modifier
             (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
               0.8
-              1.0))
-        ))
+              1.0))))
       (map
         (fn [elem]
           ; (println elem)
@@ -335,8 +356,8 @@
             (*
               (:total-driving-time elem)
               (:price-modifier elem)
-              (:arco-modifier elem))))
-        ))))
+              (:arco-modifier elem)))))
+      )))
 
 (defn compute-distance
   [station1 station2]
@@ -373,7 +394,7 @@
                   :distance (compute-distance station {:lat src-lat :lng src-lng})
                   })
               (gas-stations opt))))
-        (pmap
+        (map
           (fn [elem]
             (assoc 
               elem 
@@ -384,19 +405,19 @@
                 (:lat (:station elem)) 
                 (:lng (:station elem)) 
                 {}))))
-        (pmap
+        (map
           (fn [elem]
             (assoc elem :price-modifier
               (if (get-station-reg-price (:station elem))
                 (/ (get-station-reg-price (:station elem)) (avg-gasprice-reg (gas-stations opt)))
                 1.0))))
-        (pmap 
+        (map 
           (fn [elem]
             (assoc elem :arco-modifier
               (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
                 0.8
                 1.0))))
-        (pmap
+        (map
           (fn [elem]
             ; (println elem)
             (assoc elem :score
