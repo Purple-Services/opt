@@ -8,7 +8,7 @@
 (def station-data-file "stations.json") ;; comment: put "LA" and "gas" somewhere; next consider making a key-value pair like: LA: "parameters to get LA gas stations from mapquest" so it will be easier for us to turn on another city
 (def mapquest-box-step 2)
 (def google-api-key "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE") ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
-
+(def avg-gasprice-reg-atom (atom 0))
 (defn gen-grids-helper [br-lat br-lng tl-lat tl-lng og-lng coll] ;; please define the abbr and add some English to explain what you do here
   (cond 
     (>= br-lat tl-lat) coll
@@ -237,6 +237,23 @@
           "," src-lng "&destination=" dst-lat "," dst-lng "&waypoints=" stn-lat
           "," stn-lng "&sensor=false&key=" google-api-key))) :key-fn keyword))
 
+(defn driving-time-between
+  "Get real-time driving time between two points or that with 
+   a intermediate station using Google's Distance Matrix."
+  ([src-lat src-lng dst-lat dst-lng opt]
+    (-> 
+      (str "https://maps.googleapis.com/maps/api/distancematrix/json?origins=" src-lat
+        "," src-lng "&destinations=" dst-lat 
+        "," dst-lng "&sensor=false&departure_time=now&key=" google-api-key)
+      (client/get)
+      (:body)
+      (json/read-str :key-fn keyword)
+      (get-in [:rows 0 :elements 0 :duration_in_traffic :value])))
+  ([src-lat src-lng dst-lat dst-lng stn-lat stn-lng opt]
+    (+
+      (driving-time-between src-lat src-lng stn-lat stn-lng opt)
+      (driving-time-between stn-lat stn-lng dst-lat dst-lng opt))))
+
 (defn goog-resp->driving-time
   [goog-resp]
   (reduce (fn [coll leg] (+ coll (get-in leg [:duration :value])))
@@ -248,18 +265,11 @@
   (let [suggested-stations (suggest-gas-stations src-lng src-lat dst-lng dst-lat opt)]
     (map (fn [station]
            {:station station
-            :total-driving-time
-            (goog-resp->driving-time
-             (goog-request-route-with-station src-lng
-                                              src-lat
-                                              dst-lng
-                                              dst-lat
-                                              (:lng station)
-                                              (:lat station)))})
-         suggested-stations)))
+            :total-driving-time (driving-time-between src-lat src-lng dst-lat dst-lng (:lat station) (:lng station) {})}
+         suggested-stations))))
 
 (defn cumulative-avg
-  [numbers]
+  [_ numbers]
   (:avg
     (reduce
       (fn
@@ -280,18 +290,25 @@
 
 (defn avg-gasprice-reg
   [stations]
-  (cumulative-avg
-    (reduce
-      (fn 
-        [coll elem]
-        (if
-          (get-station-reg-price elem)
-          (conj
-            coll
-            (get-station-reg-price elem))
-          coll))
-      []
-      stations)))
+  (do
+    (if
+      (= @avg-gasprice-reg-atom 0)
+      (swap! 
+        avg-gasprice-reg-atom 
+        cumulative-avg
+        (reduce
+          (fn 
+            [coll elem]
+            (if
+              (get-station-reg-price elem)
+              (conj
+                coll
+                (get-station-reg-price elem))
+              coll))
+          []
+          stations)))
+    @avg-gasprice-reg-atom
+  ))
 
 (defn suggest-gas-stations-with-score 
   [src-lng src-lat dst-lng dst-lat opt]
@@ -328,38 +345,55 @@
       (* (- (:lat station1) (:lat station2)) (- (:lat station1) (:lat station2)))
       (* (- (:lng station1) (:lng station2)) (- (:lng station1) (:lng station2))))))
 
+(defn neighbor-blocks-filter
+  "Return true if two blocks are adjacent to each other" 
+  [block1 block2]
+  (or
+    (= block1 block2)
+    (= block1 (inc block2))
+    (= block1 (dec block2))
+    (= block1 (+ 18000 block2))
+    (= block1 (- 18000 block2))
+    (= (inc block1) (+ 18000 block2))
+    (= (inc block1) (- 18000 block2))
+    (= (dec block1) (+ 18000 block2))
+    (= (dec block1) (- 18000 block2))))
+
 (defn suggest-gas-stations-near-with-score
   [src-lng src-lat opt]
       (->>
-        (take 20
-          (sort-by 
-            :distance
-            <
-            (map
-              (fn [station]
-                {
-                  :station station
-                  :distance (compute-distance station {:lat src-lat :lng src-lng})
-                  })
-              (gas-stations opt))))
-        (map
+        (gas-stations opt)
+        (filter #(neighbor-blocks-filter (lnglat-to-block-id src-lng src-lat) (:block_id %)))
+        (pmap (fn [elem] {:station elem}))
+        (pmap
+          (fn [elem]
+            (assoc 
+              elem 
+              :total-driving-time 
+              (driving-time-between 
+                src-lat 
+                src-lng 
+                (:lat (:station elem)) 
+                (:lng (:station elem)) 
+                {}))))
+        (pmap
           (fn [elem]
             (assoc elem :price-modifier
               (if (get-station-reg-price (:station elem))
                 (/ (get-station-reg-price (:station elem)) (avg-gasprice-reg (gas-stations opt)))
                 1.0))))
-        (map 
+        (pmap 
           (fn [elem]
             (assoc elem :arco-modifier
               (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
                 0.8
                 1.0))))
-        (map
+        (pmap
           (fn [elem]
             ; (println elem)
             (assoc elem :score
               (*
-                1000
-                (:distance elem)
+                (:total-driving-time elem)
                 (:price-modifier elem)
-                (:arco-modifier elem)))))))
+                (:arco-modifier elem)))))
+        ))
