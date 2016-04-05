@@ -362,9 +362,17 @@
 (defn suggest-gas-stations-near-with-score
   [src-lng src-lat opt]
       (->>
-        (gas-stations opt)
-        (filter #(neighbor-blocks-filter (lnglat-to-block-id src-lng src-lat) (:block_id %)))
-        (pmap (fn [elem] {:station elem}))
+        (take 20
+          (sort-by 
+            :distance
+            <
+            (map
+              (fn [station]
+                {
+                  :station station
+                  :distance (compute-distance station {:lat src-lat :lng src-lng})
+                  })
+              (gas-stations opt))))
         (pmap
           (fn [elem]
             (assoc 
