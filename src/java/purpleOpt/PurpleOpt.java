@@ -10,6 +10,18 @@ import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 
+/* // for google-maps-services-java
+import com.google.maps.DistanceMatrixApi;
+import com.google.maps.GeoApiContext;
+import com.google.maps.GeocodingApi;
+import com.google.maps.GeocodingApiRequest;
+import com.google.maps.model.DistanceMatrix;
+import com.google.maps.model.DistanceMatrixElement;
+import com.google.maps.model.DistanceMatrixRow;
+import com.google.maps.model.LatLng;
+*/
+
+
 import java.text.ParseException;	// for SimpleDateFormat to UnixTime
 import java.text.SimpleDateFormat;  // for SimpleDateFormat <--> UnixTime conversion
 import java.lang.Math;
@@ -21,7 +33,7 @@ General INPUT (for major functions):
 			"lat" (Double);
 			"lng" (Double);
 			"id" (String);
-			"courier_id" (String); // "" (empty string) if no courier is assigned; CAUTION
+			"courier_id" (String); // "" (empty string) if no courier is assigned
 			"zone" (Integer);
 			"gas_type" (String);
 			"gallons" (Double);
@@ -39,14 +51,21 @@ General INPUT (for major functions):
 			"zones" (List<Integers>);
 	"human_time_format": (optional) true / false (default);
 	"current_time": (optional) SimpleDateFormat (if human_time_format is true) or UnixTime (if human_time_format is false)
-	"verbose_output": (optional) true / false (default); if true, output will add the fields:
-	                   order->status, sorted_order_list, cluster_list
+	"verbose_output": (optional) true / false (default); if true, output will add the following fields:
+	                   ->[order ID]->status, ->sorted_order_list, ->luster_list, ->unprocessed_list
+ */
+
+/* int (Integer) vs long (Long)
+ * use int (Integer) for: size, iteration index, comparator, those 
+ * use long (Long) for: time, duration
  */
 
 public class PurpleOpt {
 
 	/*--- global parameters --*/
 
+	/* current time */
+	static long currTime;
 	/* global printing switch */
 	static boolean bPrint = false; // CAUTION, use false for release
 	/* Google API key */
@@ -55,9 +74,10 @@ public class PurpleOpt {
 	/* the radius used to test nearby orders */
 	static double nearbyOrderRadius = 0.001; // this value roughly equals a street block; NOTE: the actual distance depends on the latitude of the city
 	/* average servicing minutes */
-	static int mins10GallonOrder = 20; // 20 minutes for 10 gallons
-	static int mins15GallonOrder = 25; // 25 minutes for 15 gallons 
-	static int minsGenericOrder = 25;  // 25 minutes for other orders 
+	static long mins7_5GallonOrder = 18; // 18 minutes for 7.5 gallons
+	static long mins10GallonOrder = 20; // 20 minutes for 10 gallons
+	static long mins15GallonOrder = 25; // 25 minutes for 15 gallons 
+	static long minsGenericOrder = 25;  // 25 minutes for other orders 
 	/* serving-time discount factor for a nearby order (a courier can directly walk to) */
 	static double servicingTimeFactorForNearbyOrder = 3.0/4.0; // ".0" is important
 	/* travel time's factor in score computation, minimal is 1 (no penalty) */
@@ -65,34 +85,43 @@ public class PurpleOpt {
 	/* the factor that converts l1 distance of lat-lng to driving seconds during artificial time computation */
 	static double l1ToDistanceTimeFactor = 150*100;
 	/* time delay for a currently working but non-connected courier */
-	static int not_connected_delay = 15; // minutes 
-	/* 1 hour order is urgent */
-	static int minsUrgencyThreshold = 60; 
+	static long not_connected_delay = 15; // minutes 
+	/* order due in less than 45 minutes is always urgent */
+	static long minsUrgencyThreshold = 45; 
 	/* urgency threshold for classifying dangerous orders and urgent orders in sort incomplete orders */
 	static double urgencyThreshold = 0.8;
 	/* estimated l1 distance threshold for locations equaling in search saved google distance*/
-	static double locationEqualingThreshold = 0.0005; // this value roughly equals half a street block
+	static double sameLocationTolerance = 0.0005; // this value roughly equals half a street block
 	
 	/* verbose output switch */
 	static boolean verbose_output = false;
 	/* human time format switch (only for input and output) */
 	static boolean human_time_format = false; // if true, input and output will use human readable time format
-
+	/* GeoApiContext for google maps service */
+//	static GeoApiContext context = new GeoApiContext().setApiKey(google_api_key);
+	/* save Google distance according to origin lat-lng and dest lat-lng */
+	// [org+dest] (String):
+	//    "timestamp": timestamp (Integer or String);
+	//    "duration_in_traffic": duration_in_traffic (Long);
+	static HashMap<Double[], Object> google_duration_cache = new HashMap<Double[], Object>();
+	/* duration of validation for google distance saved*/
+	static long google_duration_valid_limit = 15 * 60;
 	/*
     INPUT:
       general input (see above)
     OUTPUT: a LinkedHashmap
         [order ID]: {
-          "tag": [(String) for "unassigned" orders, there are three tags: tardy, urgent and normal; for others, use null] 
+          "tag": [(String) for "unassigned" orders, either "late", "urgent", or "normal"; for others, null] 
           "courier_id": [(String) suggested courier id],
-          "new_assignment": [(boolean) check if the assignment is a new one],
-          "courier_pos": [(Integer) the position of the order in the courier's queue (1 based), possibly null if cannot compute]
-          "courier_etf": [(Integer) estimated finish time, possibly null if cannot compute],
-          "status": (if verbose) [(String) the same as status in input],
-        sorted_order_list: (if verbose) the list of orders internally sorted, given by order id's
-        cluster_list: (if verbose) the list of order clusters, given by order id's
-        unprocessed_list: (if verbose) the list of unprocessed orders
-    NOTE: an empty LinkedHashmap will be returned if there is no unassigned order
+          "new_assignment": [(boolean) true if it is a new suggested assignment; false if it is an existing assignment],
+          "courier_pos": [(Integer) the position of the order in the courier's queue (1 based); null if cannot be determined]
+          "etf": [(Integer) estimated finish time; null if cannot be computed],
+          "status": (if verbose) [(String) the same status given in the input]
+          }
+        sorted_order_list: (if verbose) the list of orders internally sorted, given in order_id's
+        cluster_list: (if verbose) the list of order clusters, given in order_id's
+        unprocessed_list: (if verbose) the list of unprocessed orders, given in order_id's
+    NOTE: if there is no unassigned order in the input, an empty LinkedHashmap (instead of null) will be returned
 	}
 	 */
 	@SuppressWarnings("unchecked")
@@ -105,7 +134,7 @@ public class PurpleOpt {
 		else
 			human_time_format = (boolean) value;
 		// get current time from either the input or, if missing from the input, the system
-		Long currTime = getCurrUnixTime(input);
+		currTime = getCurrUnixTime(input);
 
 		value = input.get("verbose_output");
 		if (value == null)
@@ -117,6 +146,9 @@ public class PurpleOpt {
 		// initialize output HashMap
 		LinkedHashMap<String,Object> outHashMap = new LinkedHashMap<>();
 
+		// remove saved distances which are out of date
+		googleDistanceCacheClean(currTime);
+		
 		// obtain orders from the input
 		HashMap<String, Object> orders = (HashMap<String, Object>) input.get("orders");
 
@@ -143,21 +175,18 @@ public class PurpleOpt {
 		// for each order, add a field "cluster" (true or false)
 		clusterValidation(couriers, orders);
 
-		/* save Google distance according to origin lat-lng and dest lat-lng */
-		HashMap<String, Integer> google_distance_saved = new HashMap<String, Integer>(); // CAUTION, HAVEN'T CHECKED
-
 		/* compute finish status of valid couriers
 		 * and set "courier_pos", and "etf" for each "assigned", "accepted", "enroute" or "servicing" order
 		 */
-		setFinishStatus(couriers, orders, currTime, google_distance_saved);
+		setFinishStatus(couriers, orders, currTime);
 
 		// Sort all incomplete orders ("unassigned", "assigned", "accepted", "enroute", "servicing")
-		List<HashMap<String, Object>> sorted_orders = sortIncompleteOrders(orders,couriers,google_distance_saved,currTime, outHashMap);
+		List<HashMap<String, Object>> sorted_orders = sortIncompleteOrders(orders,couriers,currTime, outHashMap);
 
 		// save sorted_order_list if verbose
 		if (verbose_output){
 			// copy sorted_orders to sorted_list for future print
-			List<String> sorted_order_list = getOrderIdFromListOfOrders(sorted_orders);
+			List<String> sorted_order_list = getOrderIdListFromListOfOrders(sorted_orders);
 			// save sorted_order_list
 			outHashMap.put("sorted_order_list", sorted_order_list);
 		}
@@ -166,7 +195,7 @@ public class PurpleOpt {
 		List<List<String>> cluster_list = new ArrayList<>();
 		
 		// cluster and assign orders to couriers
-		assignOrders(cluster_list, orders, sorted_orders, couriers, google_distance_saved, currTime);
+		assignOrders(cluster_list, orders, sorted_orders, couriers, currTime);
 		
 		// save cluster_list if verbose
 		if (verbose_output)
@@ -179,27 +208,43 @@ public class PurpleOpt {
 		if (verbose_output)
 			outHashMap.put("unprocessed_list", sorted_orders);
 		
+		// collect google distance
+		if (verbose_output)
+			outHashMap.put("google_duration_cache", google_duration_cache);
+		
 		return outHashMap;
 	}
-		
+	
+  @SuppressWarnings("unchecked")
+	static void googleDistanceCacheClean(long currTime){
+		for(Double[] org_dest_key : google_duration_cache.keySet()){
+			HashMap<String, Object> record = (HashMap<String, Object>)google_duration_cache.get(org_dest_key);
+			if(Math.abs(currTime - getLongTimeFrom(record,"timestamp")) > google_duration_valid_limit){
+				// the distance saved is out of date, remove it
+				google_duration_cache.remove(org_dest_key);
+			}
+		}
+	}
+	
+  	// Based on the computation, update output LinkedHashMap
 	@SuppressWarnings("unchecked")
 	static void outputUpdate(HashMap<String, Object> orders, LinkedHashMap<String, Object> outHashMap){
 		for(String order_key: orders.keySet()){
-			HashMap<String, Object> output_entry = (HashMap<String, Object>)outHashMap.get(order_key);
+			LinkedHashMap<String, Object> output_entry = (LinkedHashMap<String, Object>)outHashMap.get(order_key);
 			HashMap<String, Object> order = (HashMap<String, Object>)orders.get(order_key);
-			output_entry.put("tag", order.get("tag"));
 			output_entry.put("new_assignment", order.get("new_assignment"));
 			output_entry.put("courier_id", order.get("courier_id"));
 			output_entry.put("courier_pos", order.get("courier_pos"));
 			if (order.get("etf") == null)
 				output_entry.put("etf", null);
 			else
-				output_entry.put("etf", ReturnTimeInRightFormat((Long) order.get("etf")));
+				output_entry.put("etf", getTimeOutputInRightFormat((Long) order.get("etf")));
+			output_entry.put("tag", order.get("tag"));
 		}
 	}
 	
 	@SuppressWarnings({ "unchecked"})
-	static void assignOrders(List<List<String>> cluster_list, HashMap<String, Object> orders, List<HashMap<String, Object>>sorted_orders, HashMap<String, Object>couriers, HashMap<String, Integer> google_distance_saved, long currTime){
+	static void assignOrders(List<List<String>> cluster_list, HashMap<String, Object> orders, List<HashMap<String, Object>>sorted_orders, HashMap<String, Object>couriers, long currTime){
 		while (!sorted_orders.isEmpty()) {
 			// initialize courier_for_base_order
 			HashMap<String,Object> courier = null;
@@ -212,12 +257,12 @@ public class PurpleOpt {
 			// if the base order does not have an courier
 			if(courier_id.equals("")){
 				// find its best courier
-				courier_id = courierScore(orders, couriers, base_order, google_distance_saved);
+				courier_id = courierScore(orders, couriers, base_order);
 				// if the best courier is found
 				if (!courier_id.equals("")){
 					// update both the courier and order
 					courier = (HashMap<String, Object>) couriers.get(courier_id);
-					assignBaseOrder(base_order, courier, google_distance_saved);
+					assignBaseOrder(base_order, courier);
 				}
 			}
 			// the base order has an assigned courier, so obtain the courier
@@ -227,9 +272,9 @@ public class PurpleOpt {
 			// ensure that the base order has been assigned to a "valid" courier; if not, do nothing
 			if((courier!=null) && ((boolean)courier.get("valid"))){
 				// do clustering, which will remove the base or other orders from sorted_orders
-				List<HashMap<String, Object>> cluster = doClustering(base_order, it, couriers, google_distance_saved, currTime);
+				List<HashMap<String, Object>> cluster = doClustering(base_order, it, couriers, currTime);
 				// record the cluster for output
-				cluster_list.add(getOrderIdFromListOfOrders(cluster));
+				cluster_list.add(getOrderIdListFromListOfOrders(cluster));
 
 				if (cluster.size()>1) {
 					// assign the non-base orders in the cluster to the courier
@@ -243,8 +288,9 @@ public class PurpleOpt {
 		}
 	}
 
+	// for a given order, compute the scores for the eligible couriers
 	@SuppressWarnings({ "unchecked", "unused" })
-	static String courierScore(HashMap<String, Object> orders, HashMap<String, Object> couriers, HashMap<String, Object> base_order, HashMap<String, Integer> google_distance_saved){
+	static String courierScore(HashMap<String, Object> orders, HashMap<String, Object> couriers, HashMap<String, Object> base_order){
 		// initialize best score, finish time, and the corresponding courier's key
 		boolean ontime_achieved = false;
 		long best_score = 0;
@@ -258,7 +304,7 @@ public class PurpleOpt {
 			if (((boolean)courier.get("valid")) && bOrderCanBeServedByCourier(base_order,courier)) { 
 				// compute score
 				long start_time = ((Long)courier.get("finish_time")); // the time when the courier will finish all the assigned orders;
-				long travel_time = timeDistantOrder(base_order, (Double)courier.get("finish_lat"), (Double)courier.get("finish_lng"), google_distance_saved);
+				long travel_time = timeDistantOrder(base_order, (Double)courier.get("finish_lat"), (Double)courier.get("finish_lng"));
 				long finish_time = start_time + travel_time; // the total time for the new order
 				long score = start_time + Math.round(travel_time_factor * (double)travel_time)
 				+ computeCrossZonePenalty(base_order,courier,orders,couriers); // score also include cross-zone penalty
@@ -280,7 +326,7 @@ public class PurpleOpt {
 	}
 	
 	@SuppressWarnings("unchecked")
-	static List<HashMap<String, Object>> doClustering(HashMap<String, Object> base_order, Iterator<HashMap<String,Object>> it, HashMap<String, Object> couriers, HashMap<String, Integer> google_distance_saved, long currTime){
+	static List<HashMap<String, Object>> doClustering(HashMap<String, Object> base_order, Iterator<HashMap<String,Object>> it, HashMap<String, Object> couriers, long currTime){
 		// do clustering
 		List<HashMap<String, Object>> cluster = new ArrayList<>();
 		// obtain base_order's courier
@@ -296,7 +342,7 @@ public class PurpleOpt {
 			// if the order satisfies conditions, then move it from the list to the cluster
 			if (bNearbyOrder(base_order,comp_order) && 
 					!bAssignedToDifferentCouriers(base_order,comp_order) && 
-					bClusterSizeFitNew(cluster, comp_order, courier_for_base_order, google_distance_saved)
+					bClusterSizeFitNew(cluster, comp_order, courier_for_base_order)
 				) 
 			{
 				cluster.add(comp_order);
@@ -306,14 +352,15 @@ public class PurpleOpt {
 		return cluster;
 	}
 	
+	// assign a courier to an order (as a base order), adding the order to the end of courier's queue
 	@SuppressWarnings("unchecked")
-	static void assignBaseOrder(HashMap<String, Object> order, HashMap<String, Object> courier, HashMap<String, Integer> google_distance_saved){
+	static void assignBaseOrder(HashMap<String, Object> order, HashMap<String, Object> courier){
 		// obtain courier's fields
 		String courier_id = (String) courier.get("id");
 		List<String> courier_assigned_orders = (List<String>) courier.get("assigned_orders");
 		long start_time = (Long)courier.get("finish_time");
 		// compute new time
-		long finish_time = start_time + timeDistantOrder(order, (Double)courier.get("finish_lat"), (Double)courier.get("finish_lng"), google_distance_saved);
+		long finish_time = start_time + timeDistantOrder(order, (Double)courier.get("finish_lat"), (Double)courier.get("finish_lng"));
 		// obtain order's fields
 		String order_id = (String) order.get("id");
 
@@ -333,6 +380,7 @@ public class PurpleOpt {
 		return;
 	}
 	
+	// assign a courier to a cluster of orders, adding the orders in the cluster to the end of courier's queue
 	@SuppressWarnings("unchecked")
 	static void assignCluster(HashMap<String, Object> courier, List<HashMap<String, Object>>cluster){
 		// get courier's fields
@@ -371,7 +419,7 @@ public class PurpleOpt {
 	}
 	
 	// from the org_list of orders, create a list with just the order id's
-	static List<String> getOrderIdFromListOfOrders(List<HashMap<String, Object>> org_list) {
+	static List<String> getOrderIdListFromListOfOrders(List<HashMap<String, Object>> org_list) {
 		List<String> out_list = new ArrayList<String> ();
 		
 		Iterator<HashMap<String, Object>> it = org_list.iterator();
@@ -382,23 +430,23 @@ public class PurpleOpt {
 		return out_list;
 	}
 
-	
+	// Initialize the output LinkedHashMap
 	@SuppressWarnings("unchecked")
 	static void outputInitialize(LinkedHashMap<String, Object> outHashMap, HashMap<String, Object> orders){
 		for(String order_key: orders.keySet()){
 			HashMap<String, Object> order = (HashMap<String, Object>)orders.get(order_key);
 			// initialize an order_info HashMap
-			HashMap<String, Object> order_info = new HashMap<String, Object>();
-			// filling tag: tardy, urgent, normal
-			order_info.put("tag",null);
-			// filling courier_id
-			order_info.put("courier_id", order.get("courier_id"));
+			LinkedHashMap<String, Object> order_info = new LinkedHashMap<String, Object>();
 			// filling new_assignment
 			order.put("new_assignment", false);
 			order_info.put("new_assignment", false);
+			// filling courier_id
+			order_info.put("courier_id", order.get("courier_id"));
 			// filling courier_pos and courier_etf
 			order_info.put("courier_pos", null);
 			order_info.put("etf", null);
+			// filling tag: late, urgent, normal
+			order_info.put("tag",null);
 			// filling status if verbose
 			if (verbose_output)
 				order_info.put("status", order.get("status"));
@@ -407,6 +455,7 @@ public class PurpleOpt {
 		}
 	}
 	
+	/*
 	@SuppressWarnings("unchecked")
 	static LinkedHashMap<String, Object> classifyByCourier(HashMap<String, Object> couriers, LinkedHashMap<String, Object> outHashMap){
 		LinkedHashMap<String, Object> result = new LinkedHashMap<String, Object>();
@@ -441,6 +490,7 @@ public class PurpleOpt {
 		}
 		return result;
 	}
+	*/
 
 	/* check whether there exists unassigned orders in orders */	
 	@SuppressWarnings("unchecked")
@@ -454,9 +504,9 @@ public class PurpleOpt {
 		return false;
 	}
 	
+	// remove any order with a status other than "unassigned", "assigned", "accepted", "enroute", or "servicing"
 	@SuppressWarnings("unchecked")
 	static void filterIncompleteOrders(HashMap<String, Object> orders){
-		// remove any order with a status other than "unassigned", "assigned", "accepted", "enroute", or "servicing",
 		Iterator<String> it = orders.keySet().iterator();
 		while (it.hasNext()) {
 			String order_key = it.next(); // get next key
@@ -579,14 +629,14 @@ public class PurpleOpt {
 
 			// get ETAs by calling the function getGoogleDistanceMatrix
 			// The result is a nested list. Each item of the outer list is an origin.
-			List<List<Integer>> listETAs = getGoogleDistanceMatrix(listOrigins, listDests);
+			List<List<Long>> listETAs = googleDistanceMatrixGetByHttp(listOrigins, listDests);
 
 			if (bPrint) 
 				System.out.println("google responded!");
 
 			// write the ETAs to the hashmap
 			// initialize listETAelements
-			List<Integer> listETAelements;
+			List<Long> listETAelements;
 			// for each row (origin), and then for each column (destination)
 			for(int i = 0; i < listETAs.size(); i++) {
 				// get the corresponding courier key from listOriginKeys
@@ -606,7 +656,7 @@ public class PurpleOpt {
 					// from outOrder, get the field "etas"
 					HashMap<String, Integer> outETAs = (HashMap<String, Integer>) outOrder.get("etas");
 					// write the order-courier ETA to outETAs
-					outETAs.put(courier_key1, listETAelements.get(j));
+					outETAs.put(courier_key1, listETAelements.get(j).intValue());
 
 					if (bPrint) {
 						System.out.print(" order at " + listDests.get(j) + " ETA: " + listETAelements.get(j) + " seconds");
@@ -624,10 +674,120 @@ public class PurpleOpt {
 			return (outHashmap);
 	}
 
+/* // for google-maps-services-java	
+	@SuppressWarnings("null")
+	public static  List<List<Long>> getGoogleDistanceMatrixLib(List<String> org_latlngs, List<String> dest_latlngs){
+		// get number of origins and dests
+		long nOrgs = org_latlngs.size();
+		long nDests = dest_latlngs.size();
+		
+		// initialize a list for result saving
+		List<List<Long>> mtxSeconds = new ArrayList<List<Long>>(org_latlngs.size());
+		List<Long> rowSeconds = null;
+		
+		// create lat-lng arrays for origins and dests
+		LatLng[] org_latlng = null;
+		LatLng[] dest_latlng = null;
+		
+		// transfer list<string> to lat-lng array
+		for(long i = 0; i<nOrgs; i++){
+			String[] strOrg = null;
+			strOrg = org_latlngs.get(i).split(",");
+			Double origin_lat = Double.parseDouble(strOrg[0]);
+			Double origin_lng = Double.parseDouble(strOrg[1]);
+			org_latlng[i] = new LatLng(origin_lat, origin_lng);
+		}
+		
+		for(long i = 0; i<nDests; i++){
+			String[] strDest = null;   
+			strDest = dest_latlngs.get(i).split(",");
+			Double dest_lat = Double.parseDouble(strDest[0]);
+			Double dest_lng = Double.parseDouble(strDest[1]);
+			dest_latlng[i] = new LatLng(dest_lat, dest_lng);
+		}
+		
+		try {
+			// Synchronous call
+			DistanceMatrix matrix = DistanceMatrixApi.newRequest(context).origins(org_latlng).destinations(dest_latlng).await();
+
+			// check number of origins and destinations returned
+			if(matrix.originAddresses.length != nOrgs || matrix.destinationAddresses.length != nDests){
+				if (bPrint)
+					System.out.println("Google result error");
+				mtxSeconds = artificialDistanceCompute(org_latlngs, dest_latlngs);
+				return mtxSeconds;
+			}
+
+			// loop through the results if the numbers returned right
+			for (long i = 0; i < nOrgs; i++) {
+				// get the row and its elements
+				DistanceMatrixRow row = matrix.rows[i];
+				// create element array for seconds
+				rowSeconds = new ArrayList<Long> (nDests);
+				// loop through the elements
+				for (long j = 0; j < nDests; j++) {
+					// get the jth element
+					DistanceMatrixElement element = row.elements[j];
+					// get its status
+					String resp_status = element.status;
+					// check status
+					if (resp_status.equals("OK")) {
+						// get duration in seconds
+						long resp_seconds = element.duration.inSeconds;
+						rowSeconds.add((long) resp_seconds);
+					}
+					else {
+						// go to artificial if the response status is not "OK"
+						String origin = org_latlngs.get(i);
+						String dest = dest_latlngs.get(j);
+						rowSeconds.add(artificialDistanceCompute(origin, dest));
+					}
+				}
+			}
+			// add the row to the output nested list mtxSeconds
+			mtxSeconds.add(rowSeconds);
+			return mtxSeconds;
+
+		} catch (Exception e) {
+			if (bPrint)
+				System.out.println("Google connection error");
+			mtxSeconds = artificialDistanceCompute(org_latlngs,dest_latlngs);
+			return mtxSeconds;
+		}
+
+	}
+	
+	// not used temporarily
+	public static void LatLngToAddress(List<String> org_latlngs, List<String> dest_latlngs, String[] str_orgs, String[] str_dests){
+		// transfer origins from string of lat-lng to string of address
+		for(long i = 0; i<org_latlngs.size(); i++){
+			String[] strOrg = null;
+			strOrg = org_latlngs.get(i).split(",");
+			Double origin_lat = Double.parseDouble(strOrg[0]);
+			Double origin_lng = Double.parseDouble(strOrg[1]);
+			LatLng origin = new LatLng(origin_lat, origin_lng);
+			// transfer LatLng to Address
+			GeocodingApiRequest request = GeocodingApi.reverseGeocode(context, origin);
+			str_orgs[i] = request.toString();
+		}
+		// transfer dests from string of lat-lng to string of address
+		for(long i = 0; i<dest_latlngs.size(); i++){
+			String[] strDest = null;   
+			strDest = dest_latlngs.get(i).split(",");
+			Double dest_lat = Double.parseDouble(strDest[0]);
+			Double dest_lng = Double.parseDouble(strDest[1]);
+			LatLng dest = new LatLng(dest_lat, dest_lng);
+			// transfer LatLng to Address
+			GeocodingApiRequest request = GeocodingApi.reverseGeocode(context, dest);
+			str_dests[i] = request.toString();
+		}
+	}
+*/
+	
 	/* return the all-pair google distance for a list of origins and destinations 
 	 * TODO: add an option to feed user specified time of travel
 	 */
-	public static List<List<Integer>> getGoogleDistanceMatrix(List<String> org_latlngs, List<String> dest_latlngs) {
+	public static List<List<Long>> googleDistanceMatrixGetByHttp(List<String> org_latlngs, List<String> dest_latlngs) {
 		int nOrgs = org_latlngs.size();
 		int nDests = dest_latlngs.size();
 
@@ -664,8 +824,8 @@ public class PurpleOpt {
 		String outputString = "";
 
 		// initialize the outer list
-		List<List<Integer>> mtxSeconds = new ArrayList<List<Integer>>(nOrgs);
-		List<Integer> rowSeconds;
+		List<List<Long>> mtxSeconds = new ArrayList<List<Long>>(nOrgs);
+		List<Long> rowSeconds;
 
 		try {
 			// send the request to Google
@@ -688,7 +848,7 @@ public class PurpleOpt {
 			if(!((String)((JSONObject)json_array.get(0)).get("status")).equals("OK")){
 				if (bPrint)
 					System.out.println("Google result error");
-				mtxSeconds = getArtificialDistance(org_latlngs, dest_latlngs);
+				mtxSeconds = artificialDistanceCompute(org_latlngs, dest_latlngs);
 				return mtxSeconds;
 			}
 
@@ -703,7 +863,7 @@ public class PurpleOpt {
 			if(rows.size() != nOrgs){
 				if (bPrint)
 					System.out.println("Google result error for all origins");
-				mtxSeconds = getArtificialDistance(org_latlngs, dest_latlngs);
+				mtxSeconds = artificialDistanceCompute(org_latlngs, dest_latlngs);
 				return mtxSeconds;
 			}
 
@@ -714,7 +874,7 @@ public class PurpleOpt {
 				elements = (JSONArray) row.get("elements");
 
 				// create element array for seconds
-				rowSeconds = new ArrayList<Integer> (nDests);
+				rowSeconds = new ArrayList<Long> (nDests);
 
 				// check the number of destinations returned for this origin
 				if(elements.size() != nDests){
@@ -723,7 +883,7 @@ public class PurpleOpt {
 					String origin = org_latlngs.get(i);
 					for(int j = 0; j< nDests; j++) {
 						String dest = dest_latlngs.get(j);
-						rowSeconds.add(getArtificialDistance(origin, dest));
+						rowSeconds.add(artificialDistanceCompute(origin, dest));
 					}
 				}
 				else {
@@ -733,13 +893,13 @@ public class PurpleOpt {
 						resp_status = (String)element.get("status");
 						if (resp_status.equals("OK")) {
 							resp_seconds = (Long)((JSONObject)element.get("duration_in_traffic")).get("value");
-							rowSeconds.add(resp_seconds.intValue());
+							rowSeconds.add(resp_seconds);
 						}
 						else {
 							// go to artificial if the response status is not "OK"
 							String origin = org_latlngs.get(i);
 							String dest = dest_latlngs.get(j);
-							rowSeconds.add(getArtificialDistance(origin, dest));
+							rowSeconds.add(artificialDistanceCompute(origin, dest));
 						}
 					}
 				}
@@ -751,13 +911,13 @@ public class PurpleOpt {
 		} catch (Exception e) {
 			if (bPrint)
 				System.out.println("Google connection error");
-			mtxSeconds = getArtificialDistance(org_latlngs,dest_latlngs);
+			mtxSeconds = artificialDistanceCompute(org_latlngs,dest_latlngs);
 			return mtxSeconds;
 		}
 	}
 
 	// single-origin single-dest artificial distance computing
-	static Integer getArtificialDistance(String org_latlngs, String dest_latlngs){
+	static Long artificialDistanceCompute(String org_latlngs, String dest_latlngs){
 		//get origin position
 		String[] strOrg = null;
 		strOrg = org_latlngs.split(",");
@@ -769,21 +929,21 @@ public class PurpleOpt {
 		Double dest_lat = Double.parseDouble(strDest[0]);
 		Double dest_lng = Double.parseDouble(strDest[1]);
 		//calculate distance
-		Integer dist = getArtificialDistance(origin_lat, origin_lng, dest_lat, dest_lng);
+		Long dist = artificialDistanceCompute(origin_lat, origin_lng, dest_lat, dest_lng);
 		return dist;
 
 	}
 
 	// multi-origins multi-dests artificial distance computing
-	static List<List<Integer>> getArtificialDistance(List<String> org_latlngs, List<String> dest_latlngs){
+	static List<List<Long>> artificialDistanceCompute(List<String> org_latlngs, List<String> dest_latlngs){
 		int nOrgs = org_latlngs.size();
 		int nDests = dest_latlngs.size();
-		List<Integer> rowSeconds;
-		List<List<Integer>> mtxSeconds = new ArrayList<List<Integer>>(nOrgs);
+		List<Long> rowSeconds;
+		List<List<Long>> mtxSeconds = new ArrayList<List<Long>>(nOrgs);
 
 		for(int i = 0; i < nOrgs; i++)
 		{
-			rowSeconds = new ArrayList<Integer> (nDests);
+			rowSeconds = new ArrayList<Long> (nDests);
 			// abstract origin lat and lng from input string
 			String[] strOrg = null;   
 			strOrg = (org_latlngs.get(i)).split(",");
@@ -799,7 +959,7 @@ public class PurpleOpt {
 				Double dest_lat = Double.parseDouble(strDest[0]);
 				Double dest_lng = Double.parseDouble(strDest[1]);
 
-				rowSeconds.add(getArtificialDistance(origin_lat, origin_lng, dest_lat, dest_lng));
+				rowSeconds.add(artificialDistanceCompute(origin_lat, origin_lng, dest_lat, dest_lng));
 			}
 			mtxSeconds.add(rowSeconds);
 		}
@@ -810,17 +970,17 @@ public class PurpleOpt {
 		/* --- get current time in the Unix time format --- */
 		long currTime = 0;
 		Object value = (Object) input.get("current_time");
-		if (value == null) {
-			// get the system time
+		
+		if (value == null)
+			// get the current system time
 			currTime = System.currentTimeMillis() / 1000L;
-		} 
-		else {
-			// get the specified "current time"
-			if (human_time_format)
-				currTime = SimpleDateFormatToUnixTime((String)value);
-			else
-				currTime = (Long) value;
-		}
+		else if (human_time_format)
+			// get the specified "current time" in human time format
+			currTime = SimpleDateFormatToUnixTime((String)value);
+		else
+			// get the specified "current time" in the Unix time format
+			currTime = (Long) value;
+		
 		return currTime;
 	}
 
@@ -829,12 +989,12 @@ public class PurpleOpt {
 	 * Related orders also get courier_id / courier_pos / etf
 	 */
 	@SuppressWarnings("unchecked")
-	static void setFinishStatus(HashMap<String, Object> couriers, HashMap<String, Object> orders, long currTime, HashMap<String, Integer> google_distance_saved){
+	static void setFinishStatus(HashMap<String, Object> couriers, HashMap<String, Object> orders, Long currTime){
 		for(String courier_key: couriers.keySet()) {
 			// get the courier by their key
 			HashMap<String, Object> courier = (HashMap<String, Object>) couriers.get(courier_key);
 			// get finish time/lat/lng
-			HashMap<String, Object> finish = computeFinishTimeLatLng(courier, orders, currTime, google_distance_saved);
+			HashMap<String, Object> finish = computeFinishTimeLatLng(courier, orders, currTime);
 			// add entries to the existing couriers hashmap for later use
 			courier.put("finish_time", finish.get("finish_time"));
 			courier.put("finish_lat", finish.get("finish_lat"));
@@ -857,7 +1017,7 @@ public class PurpleOpt {
 	 * Related orders also get courier_id / courier_pos / etf
 	 */
 	@SuppressWarnings("unchecked")
-	static HashMap<String,Object> computeFinishTimeLatLng(HashMap<String, Object> courier, HashMap<String, Object> orders, long startTime, HashMap<String, Integer> google_distance_saved) {
+	static HashMap<String,Object> computeFinishTimeLatLng(HashMap<String, Object> courier, HashMap<String, Object> orders, long startTime) {
 
 		// exception handling for a courier without the field "valid" or is invalid, just in case
 		Boolean bValid = (Boolean) courier.get("valid");
@@ -901,7 +1061,7 @@ public class PurpleOpt {
 				finish_time += iOrderServingTime(order) / 2;
 			else {
 				if(bCourierValidLocation(courier))
-					finish_time += getGoogleDistance(finish_lat, finish_lng, order_lat, order_lng, google_distance_saved)
+					finish_time += googleDistanceGetByHttp(finish_lat, finish_lng, order_lat, order_lng)
 					+ iOrderServingTime(order);
 				else
 					finish_time += iOrderServingTime(order) + not_connected_delay * 60;
@@ -930,13 +1090,13 @@ public class PurpleOpt {
 				}
 				else {
 					// add both traveling and servicing times
-					finish_time += timeDistantOrder(order, prev_order_lat, prev_order_lng, google_distance_saved);
+					finish_time += timeDistantOrder(order, prev_order_lat, prev_order_lng);
 				}
 
 				// tag the order with its assigned courier
 				// order.put("courier_id", (String)courier.get("id")); // commented out because the courier_id should be already there
-				order.put("etf", finish_time); // CAUTION. Has this information been passed to outHashMap?
-				order.put("courier_pos", new Long((long)(i+1))); // CAUTION. Has this information been passed to outHashMap?
+				order.put("etf", finish_time);
+				order.put("courier_pos", new Long((long)(i+1)));
 			}
 			// update finish_lat / lng
 			finish_lat = order_lat;
@@ -964,21 +1124,26 @@ public class PurpleOpt {
 		return outHashMap;
 	}
 
-	// determine whether two orders are nearby or not
-	static boolean bNearbyOrderLatLng(Double lat1, Double lng1, Double lat2, Double lng2) {
-		if ((lat1-lat2)*(lat1-lat2) + (lng1-lng2)*(lng1-lng2) <= nearbyOrderRadius*nearbyOrderRadius)
+	// determine whether two locations are close up to the tolerance
+	static boolean googleDistanceZero(Double lat1, Double lng1, Double lat2, Double lng2, Double tol) {
+		if ((lat1-lat2)*(lat1-lat2) + (lng1-lng2)*(lng1-lng2) <= tol*tol)
 			return true;
 		else
 			return false;
 	}
 
+	// determine whether two orders are nearby or not
+	static boolean bNearbyOrderLatLng(Double lat1, Double lng1, Double lat2, Double lng2) {
+		return googleDistanceZero(lat1, lng1, lat2, lng2, nearbyOrderRadius);
+	}
+	
 	/* decide whether two orders are considered nearby */
 	static boolean bNearbyOrder(HashMap<String,Object> order1, HashMap<String,Object> order2) {
 		return bNearbyOrderLatLng((Double) order1.get("lat"), (Double) order1.get("lng"),
 				(Double) order2.get("lat"), (Double) order2.get("lng"));
 	}
 
-	/* decide whether a courier is valid to take orders */
+	/* decide whether a courier has a valid location so it can take orders */
 	public static boolean bCourierValidLocation(HashMap<String, Object> courier){
 		// get the courier connection status
 		Boolean connected = (Boolean) courier.get("connected");
@@ -1125,7 +1290,8 @@ public class PurpleOpt {
 	static String UnixTimeToSimpleDateFormat(Long unixTime) {
 		Date dateTime = new Date(unixTime * 1000L);
 		SimpleDateFormat sdfFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss z");
-		sdfFormat.setTimeZone(TimeZone.getTimeZone("PST"));
+//		sdfFormat.setTimeZone(TimeZone.getTimeZone("PST"));
+		sdfFormat.setTimeZone(TimeZone.getTimeZone("America/Los_Angeles"));
 		return sdfFormat.format(dateTime);
 	}
 
@@ -1133,7 +1299,7 @@ public class PurpleOpt {
 	static String UnixTimeToSimpleDateFormatNoDate(Long unixTime) {
 		Date dateTime = new Date(unixTime * 1000L);
 		SimpleDateFormat sdfFormat = new SimpleDateFormat("HH:mm:ss z");
-		sdfFormat.setTimeZone(TimeZone.getTimeZone("PST"));
+		sdfFormat.setTimeZone(TimeZone.getTimeZone("America/Los_Angeles"));
 		return sdfFormat.format(dateTime);
 	}
 
@@ -1150,13 +1316,13 @@ public class PurpleOpt {
 		return null;
 	}
 
-	/* strip off the date from a SimpleDateFormat with time zone info */
+	/* remove the date from a SimpleDateFormat with time zone info */
 	static String SimpleDateFormatRemoveDate(String sdfTime) {
 		SimpleDateFormat sdfFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss z");
 		try {
 			Date dateTime = sdfFormat.parse(sdfTime);
 			SimpleDateFormat sdfFormatNoDate = new SimpleDateFormat("HH:mm:ss z");			
-			sdfFormatNoDate.setTimeZone(TimeZone.getTimeZone("PST"));
+			sdfFormat.setTimeZone(TimeZone.getTimeZone("America/Los_Angeles"));
 			return sdfFormatNoDate.format(dateTime.getTime());
 		}
 		catch (ParseException e) {
@@ -1165,9 +1331,9 @@ public class PurpleOpt {
 		return null;
 	}
 
+	// determine whether a courier is on the site of an order
 	static boolean bCourierAtOrderSite(HashMap<String,Object> order, HashMap<String,Object> courier) {
 		// true if the courier at the order site; false otherwise.
-
 		String ordStatus = (String) order.get("status");
 		if (ordStatus.equals("servicing"))
 			return true;
@@ -1176,131 +1342,197 @@ public class PurpleOpt {
 	}
 
 	// average servicing time in second by gallons
-	static int iOrderServingTime(HashMap<String,Object> order) {
-		Double gallons = (Double) order.get("gallons");
-		switch (gallons.intValue()) {
-		case 10:
+	static long iOrderServingTime(HashMap<String,Object> order) {
+		double epsilon = 0.05; // 5% difference tolerance
+		double gallons = Double.MAX_VALUE;
+		
+		// obtain gallon numbers
+		Object val = order.get("gallons");
+		if (val instanceof Double)
+			gallons = (Double) val;
+		else if (val instanceof Integer)
+			gallons = ((Integer) val).doubleValue();
+		else
+			throw new IllegalArgumentException();
+				
+		if (nearlyEqual(gallons, 7.5, epsilon)) // 7.5 gallons
+			return 60 * mins7_5GallonOrder;
+		else if (nearlyEqual(gallons, 10.0, epsilon)) // 10 gallons
 			return 60 * mins10GallonOrder;
-		case 15:
+		else if (nearlyEqual(gallons, 15.0, epsilon)) // 15 gallons
 			return 60 * mins15GallonOrder;
-		default:
+		else
 			return 60 * minsGenericOrder;
-		}
 
 	}
 
 	// search if the distance between two locations has been saved before
-	static int searchSavedDistance(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng, HashMap<String, Integer>google_distance_saved){
-		for(String distance_key : google_distance_saved.keySet()){
-			String[] strPos = null;
-			strPos = distance_key.split(",");
-			Double saved_org_lat = Double.parseDouble(strPos[0]);
-			Double saved_org_lng = Double.parseDouble(strPos[1]);
-			Double saved_des_lat = Double.parseDouble(strPos[2]);
-			Double saved_des_lng = Double.parseDouble(strPos[3]);
-			// l2 distance between input origin and saved origin
-			double orgl2distance = Math.pow((origin_lat - saved_org_lat), 2) + Math.pow((origin_lng - saved_org_lng), 2);
-			// l2 distance between input dest and saved dest
-			double destl2distance = Math.pow((dest_lat - saved_des_lat), 2) + Math.pow((dest_lng - saved_des_lng), 2);
-			if(orgl2distance <= Math.pow(locationEqualingThreshold, 2) && destl2distance <= Math.pow(locationEqualingThreshold, 2))
-				return google_distance_saved.get(distance_key);
+	@SuppressWarnings("unchecked")
+	static long googleDistanceCacheSearch(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
+		for(Double[] org_dest_key : google_duration_cache.keySet()){
+			Double saved_org_lat = org_dest_key[0];
+			Double saved_org_lng = org_dest_key[1];
+			Double saved_des_lat = org_dest_key[2];
+			Double saved_des_lng = org_dest_key[3];
 
-			/* note: distance from origin to dest equals to distance from dest to origin
-			 * exchange input origin and input dest, then check l2 distance again
-			 */
-			orgl2distance = Math.pow((dest_lat - saved_org_lat), 2) + Math.pow((dest_lng - saved_org_lng), 2);
-			destl2distance = Math.pow((origin_lat - saved_des_lat), 2) + Math.pow((origin_lng - saved_des_lng), 2);
-			if(orgl2distance <= Math.pow(locationEqualingThreshold, 2) && destl2distance <= Math.pow(locationEqualingThreshold, 2))
-				return google_distance_saved.get(distance_key);
+			// target origin and dest are close to a pair of saved records
+			if(googleDistanceZero(origin_lat, origin_lng, saved_org_lat, saved_org_lng, sameLocationTolerance) &&
+			   googleDistanceZero(dest_lat,   dest_lng,   saved_des_lat, saved_des_lng, sameLocationTolerance)   ){
+				// get saved record in google_duration_cache
+				HashMap<String, Object> record = (HashMap<String, Object>) google_duration_cache.get(org_dest_key);
+				// get saved timestamp
+				if(Math.abs(currTime - getLongTimeFrom(record,"timestamp")) <= google_duration_valid_limit)
+						return (Long)record.get("duration_in_traffic");
+				// do not remove record here to avoid concurrent modification
+			}
 		}
-		// if no saved results
-		return 0;
+		// if not found in saved records, return 0
+		return -1;
 	}
 
 	// after calling google API, save the distance
-	public static int saveGoogleDistance(int seconds, Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng, HashMap<String, Integer>google_distance_saved){
+	static long googleDistanceAddToCache(long seconds, Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
 		// create key
-		String distance_key = Double.toString(origin_lat) + ',' + Double.toString(origin_lng) + ',' + Double.toString(dest_lat) + ',' + Double.toString(dest_lng);
-		google_distance_saved.put(distance_key, seconds);
+		Double[] org_dest_key = {origin_lat,origin_lng,dest_lat,dest_lng};
+		// create record structure for distance_key
+		HashMap<String, Object> record = new HashMap<String, Object>(); 
+		// write record
+		record.put("timestamp", getTimeOutputInRightFormat(currTime, true));	// true means includes date
+		record.put("duration_in_traffic", seconds);
+		// write in global saving vessel
+		google_duration_cache.put(org_dest_key, record);
 		return 0;
 	}
 
-	/* return the google distance for a courier to an order 
-	 * TODO: add an option for a user specified time
-	 */
-	public static int getGoogleDistance(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng, HashMap<String, Integer>google_distance_saved) {
+/* // for google-maps-services-java
+	// OLD_TODO: How to eliminate verbose
+	// OLD_TODO: How to do background running
+	// use google-maps-services library to call google api, which performs better comparing to the original method
+	public static long getGoogleDistanceLib(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng) {
 
 		// check if the origin and dest are the same place
 		if((origin_lat == dest_lat) && (origin_lng == dest_lng))
 			return 0;
 
 		// if not check if the distance has been saved
-		int seconds = searchSavedDistance(origin_lat, origin_lng, dest_lat, dest_lng, google_distance_saved);
+		long seconds = googleDistanceCacheSearch(origin_lat, origin_lng, dest_lat, dest_lng);
 		if(seconds != 0)
 			return seconds;
 
-		// if not saved, compute again
-		// set courier as the origin
-		String org = origin_lat.toString() + "," + origin_lng.toString();
-		// set order as the destination
-		String dest = dest_lat.toString() + "," + dest_lng.toString();
+		// create class LatLng for origin and dest
+		LatLng origin = new LatLng(origin_lat, origin_lng);
+		LatLng dest = new LatLng(dest_lat, dest_lng);
 
-		// generate request URL 
-		String reqURL = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=" + org + "&destinations=" + dest;
-		reqURL += "&departure_time=now";
-		reqURL += "&key=" + google_api_key;
+		try{
+			// call google api to get result
+			DistanceMatrix matrix = DistanceMatrixApi.newRequest(context).origins(origin).destinations(dest).await();
+			DistanceMatrixElement row_0_element_0 = matrix.rows[0].elements[0];
+			String resp_status = row_0_element_0.status;
 
-		// debug display
-		if (bPrint)
-			System.out.println(reqURL);
-
-		// send the request to google
-		URL url;
-		HttpURLConnection conn;
-		String outputString = "";
-
-		try {
-			url = new URL(reqURL);
-			conn = (HttpURLConnection) url.openConnection();
-			conn.setRequestMethod("GET");
-
-			BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-			String line;
-			while ((line = reader.readLine()) != null) {
-				outputString += line;
-			}
-
-			// initial JSON parser
-			JSONParser parser=new JSONParser();
-			JSONArray json_array = (JSONArray)parser.parse("[" + outputString + "]");
-			JSONObject row_0_element_0 = (JSONObject)((JSONArray)((JSONObject)((JSONArray)((JSONObject) json_array.get(0)).get("rows")).get(0)).get("elements")).get(0);
-
-			// check if "status" is "OK" in the JSON
-			String resp_status = (String)row_0_element_0.get("status");
 			if (resp_status.equals("OK")) {
 				// parse JSON for the seconds
-				Long resp_seconds = (Long)((JSONObject)row_0_element_0.get("duration_in_traffic")).get("value");
-				seconds = resp_seconds.intValue();
-				saveGoogleDistance(seconds, origin_lat, origin_lng, dest_lat, dest_lng, google_distance_saved);
+				long resp_seconds = row_0_element_0.duration.inSeconds;
+				googleDistanceAddToCache((long) resp_seconds, origin_lat, origin_lng, dest_lat, dest_lng);
 			}
 			else {
 				if (bPrint)
 					System.out.println("Google zero result");
-				return getArtificialDistance(origin_lat, origin_lng, dest_lat, dest_lng); 
+				return artificialDistanceCompute(origin_lat, origin_lng, dest_lat, dest_lng); 
 			}
 		} catch (Exception e) {
 			// e.printStackTrace();
 			if (bPrint)
 				System.out.println("Google connection error");
-			return getArtificialDistance(origin_lat, origin_lng, dest_lat, dest_lng);
+			return  artificialDistanceCompute(origin_lat, origin_lng, dest_lat, dest_lng);
+			
 		}
 
 		return seconds;
 	}
+*/		
+
+	
+	/* return the google distance for a courier to an order 
+	 * TODO: add an option for a user specified time
+	 */
+	public static long googleDistanceGetByHttp(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng) {
+
+		// check if the origin and dest are the same place
+		if (googleDistanceZero(origin_lat, origin_lng, dest_lat, dest_lng, sameLocationTolerance))
+			return 0;
+
+		// if not check if the distance has been saved, return -1 if not found
+		long seconds = googleDistanceCacheSearch(origin_lat, origin_lng, dest_lat, dest_lng);
+		
+		if (seconds != -1)
+			// found in the cache
+			return seconds;
+		else {
+			// not found, so call Google for the distance
+
+			// set courier as the origin
+			String org = origin_lat.toString() + "," + origin_lng.toString();
+			// set order as the destination
+			String dest = dest_lat.toString() + "," + dest_lng.toString();
+
+			// generate request URL 
+			String reqURL = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=" + org + "&destinations=" + dest;
+			reqURL += "&departure_time=now";
+			reqURL += "&key=" + google_api_key;
+
+			// debug display
+			if (bPrint)
+				System.out.println(reqURL);
+
+			// send the request to google
+			URL url;
+			HttpURLConnection conn;
+			String outputString = "";
+
+			try {
+				url = new URL(reqURL);
+				conn = (HttpURLConnection) url.openConnection();
+				conn.setRequestMethod("GET");
+				conn.setConnectTimeout(5000);
+
+				BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+				String line;
+				while ((line = reader.readLine()) != null) {
+					outputString += line;
+				}
+
+				// initial JSON parser
+				JSONParser parser=new JSONParser();
+				JSONArray json_array = (JSONArray)parser.parse("[" + outputString + "]");
+				JSONObject row_0_element_0 = (JSONObject)((JSONArray)((JSONObject)((JSONArray)((JSONObject) json_array.get(0)).get("rows")).get(0)).get("elements")).get(0);
+
+				// check if "status" is "OK" in the JSON
+				String resp_status = (String)row_0_element_0.get("status");
+				if (resp_status.equals("OK")) {
+					// parse JSON for the seconds
+					Long resp_seconds = (Long)((JSONObject)row_0_element_0.get("duration_in_traffic")).get("value");
+					seconds = resp_seconds.intValue();
+					googleDistanceAddToCache(seconds, origin_lat, origin_lng, dest_lat, dest_lng);
+				}
+				else {
+					if (bPrint)
+						System.out.println("Google zero result");
+					return artificialDistanceCompute(origin_lat, origin_lng, dest_lat, dest_lng); 
+				}
+			} catch (Exception e) {
+				// e.printStackTrace();
+				if (bPrint)
+					System.out.println("Google connection error");
+				return artificialDistanceCompute(origin_lat, origin_lng, dest_lat, dest_lng);
+			}
+
+			return seconds;
+		}
+	}
 
 	/* used for offline and non-google distance computation */
-	public static int getArtificialDistance(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng) {
-		return (int) Math.round(l1ToDistanceTimeFactor * (double)((Math.abs(origin_lat - dest_lat) + Math.abs(origin_lng - dest_lng))));
+	public static long artificialDistanceCompute(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng) {
+		return (long) Math.round(l1ToDistanceTimeFactor * (double)((Math.abs(origin_lat - dest_lat) + Math.abs(origin_lng - dest_lng))));
 	}
 
 	static long timeNearbyOrder(HashMap<String,Object> order) {
@@ -1308,15 +1540,15 @@ public class PurpleOpt {
 	}
 
 	/* return the total time spent on an order that is away from the previous lat-lng location */
-	static long timeDistantOrder(HashMap<String,Object> order, Double prev_lat, Double prev_lng, HashMap<String, Integer> google_distance_saved) {
-		return getGoogleDistance(prev_lat, prev_lng, (Double)order.get("lat"), (Double)order.get("lng"), google_distance_saved) // travel time
+	static long timeDistantOrder(HashMap<String,Object> order, Double prev_lat, Double prev_lng) {
+		return googleDistanceGetByHttp(prev_lat, prev_lng, (Double)order.get("lat"), (Double)order.get("lng")) // travel time
 				+ iOrderServingTime(order); // servicing time
 
 	}
 
 	// estimate the servicing duration of an order in a cluster
 	static long avgSecondsInClusterByType(HashMap<String,Object> order) {
-		long type_seconds = GetLongTimeFrom(order,"target_time_end")-GetLongTimeFrom(order,"target_time_start");
+		long type_seconds = getLongTimeFrom(order,"target_time_end")-getLongTimeFrom(order,"target_time_start");
 		if (type_seconds <= 3600) // 1-hour order
 			return iOrderServingTime(order);
 		else if (type_seconds <= 7200) // up to 3-hour order
@@ -1325,7 +1557,8 @@ public class PurpleOpt {
 			return iOrderServingTime(order) - 6*60; // relax 6 minutes
 	}
 
-	static boolean bClusterSizeFitNew(List<HashMap<String,Object>> cluster, HashMap<String,Object> candidate_order, HashMap<String, Object> courier, HashMap<String, Integer> google_distance_saved){
+	// determine where an order can be added to a cluster ("courier" is assigned to this cluster)
+	static boolean bClusterSizeFitNew(List<HashMap<String,Object>> cluster, HashMap<String,Object> candidate_order, HashMap<String, Object> courier){
 		// cluster's iterator
 		Iterator<HashMap<String, Object>> it = cluster.iterator();
 		// get base order
@@ -1344,7 +1577,7 @@ public class PurpleOpt {
 		cluster_etf += avgSecondsInClusterByType(candidate_order);
 		
 		// obtain the deadline of the candidate order
-		long candidate_deadline = GetLongTimeFrom(candidate_order,"target_time_end");
+		long candidate_deadline = getLongTimeFrom(candidate_order,"target_time_end");
 
 		// check if the candidate order can be added while still meeting the deadline
 		if (cluster_etf  <= candidate_deadline)	
@@ -1353,49 +1586,51 @@ public class PurpleOpt {
 			return false;
 	}
 
-	// determine whether a candidate order can be added to an existing cluster 
-	static boolean bClusterSizeFit(List<HashMap<String,Object>> cluster, HashMap<String,Object> candicate_order, Long currTime) {
-		long total_servicing_seconds = 0;
-		long latest_deadline = currTime;	// in second
+	
+//	// determine whether a candidate order can be added to an existing cluster 
+//	static boolean bClusterSizeFit(List<HashMap<String,Object>> cluster, HashMap<String,Object> candicate_order, Long currTime) {
+//		long total_servicing_seconds = 0;
+//		long latest_deadline = currTime;	// in second
+//
+//		// compute total servicing duration and last deadline for the orders in the cluster
+//		Iterator<HashMap<String, Object>> it = cluster.iterator();
+//		while (it.hasNext()) {
+//			// get an order from cluster
+//			HashMap<String, Object> order = it.next();
+//			// compute total servicing duration
+//			total_servicing_seconds += avgSecondsInClusterByType(order);
+//			// compute earliest deadline
+//			long deadline = getLongTimeFrom(order,"target_time_end");
+//			latest_deadline = (deadline > latest_deadline)?deadline:latest_deadline;	// this is unnecessary because orders are sorted by deadline, but keep for future proof
+//
+//		}
+//		
+//		// update total servicing duration and last deadline for the candidate order
+//		total_servicing_seconds += avgSecondsInClusterByType(candicate_order);
+//		long deadline = getLongTimeFrom(candicate_order,"target_time_end");
+//		latest_deadline = (deadline > latest_deadline)?deadline:latest_deadline;	// this is unnecessary because orders are sorted by deadline, but keep for future proof
+//
+//		// compute remaining seconds from the updated deadline
+//		long remaining = latest_deadline-currTime;
+//
+//		// check if the candidate order can be added while still meeting the deadline
+//		// 10 gives a 10-minute GRACE PERIOD for the courier to arrive (hypothetical)
+//		if (total_servicing_seconds + 10*60 <= remaining )	
+//			/* TODO: 10*60 can be too optimistic. In fact, we can assign courier as 
+//			 * we form clusters. This way, we can decide the courier to assign and replace 10*60 by an accurate number
+//			 */
+//			return true;
+//		else
+//			return false;
+//	}
 
-		// compute total servicing duration and last deadline for the orders in the cluster
-		Iterator<HashMap<String, Object>> it = cluster.iterator();
-		while (it.hasNext()) {
-			// get an order from cluster
-			HashMap<String, Object> order = it.next();
-			// compute total servicing duration
-			total_servicing_seconds += avgSecondsInClusterByType(order);
-			// compute earliest deadline
-			long deadline = GetLongTimeFrom(order,"target_time_end");
-			latest_deadline = (deadline > latest_deadline)?deadline:latest_deadline;	// this is unnecessary because orders are sorted by deadline, but keep for future proof
-
-		}
-		
-		// update total servicing duration and last deadline for the candidate order
-		total_servicing_seconds += avgSecondsInClusterByType(candicate_order);
-		long deadline = GetLongTimeFrom(candicate_order,"target_time_end");
-		latest_deadline = (deadline > latest_deadline)?deadline:latest_deadline;	// this is unnecessary because orders are sorted by deadline, but keep for future proof
-
-		// compute remaining seconds from the updated deadline
-		long remaining = latest_deadline-currTime;
-
-		// check if the candidate order can be added while still meeting the deadline
-		// 10 gives a 10-minute GRACE PERIOD for the courier to arrive (hypothetical)
-		if (total_servicing_seconds + 10*60 <= remaining )	
-			/* TODO: 10*60 can be too optimistic. In fact, we can assign courier as 
-			 * we form clusters. This way, we can decide the courier to assign and replace 10*60 by an accurate number
-			 */
-			return true;
-		else
-			return false;
-	}
 
 	/* Sort all incomplete orders like: "service" < "enroute" < "unassigned"
 	 * In each category, earlier deadlines < later deadlines
 	 * Orders with other status are removed.
 	 */
 	@SuppressWarnings("unchecked")
-	static List<HashMap<String,Object>> sortIncompleteOrders(HashMap<String,Object> orders, HashMap<String, Object> couriers, HashMap<String, Integer> google_distance_saved, Long currTime, LinkedHashMap<String, Object> outHashMap) {
+	static List<HashMap<String,Object>> sortIncompleteOrders(HashMap<String,Object> orders, HashMap<String, Object> couriers, Long currTime, LinkedHashMap<String, Object> outHashMap) {
 
 		// initialize unassigned_order_list
 		List<HashMap<String, Object>> incomplete_order_list = new ArrayList<>();
@@ -1403,10 +1638,10 @@ public class PurpleOpt {
 			incomplete_order_list.add((HashMap<String, Object>)order);
 		}
 		
-		// for every unassigned order, add the field "tag" ("tardy", "urgent", "normal")
+		// for every unassigned order, add the field "tag" ("late", "urgent", "normal")
 		for(HashMap<String, Object> order: incomplete_order_list){
 			if ((order.get("status")).equals("unassigned"))
-				tagUnassignedOrder(order, couriers, google_distance_saved, currTime);
+				tagUnassignedOrder(order, couriers, currTime);
 			else
 				order.put("tag", null);
 		}
@@ -1414,7 +1649,7 @@ public class PurpleOpt {
 		// score unassigned orders according to their tags
 		for(HashMap<String, Object> order: incomplete_order_list){
 			if ((order.get("status")).equals("unassigned"))
-				scoreUnassignedOrder(order, couriers, google_distance_saved, currTime);
+				scoreUnassignedOrder(order, couriers, currTime);
 		}
 
 		// sort orders according to status, tag and urgency/score 
@@ -1438,8 +1673,8 @@ public class PurpleOpt {
 					// both orders are unassigned, then check tag
 					String o1_tag = (String)o1.get("tag");
 					String o2_tag = (String)o2.get("tag");
-					if(!o1_tag.equals("tardy") && o2_tag.equals("tardy"))
-						// give priority to "tardy" over "urgent" and "normal"
+					if(!o1_tag.equals("late") && o2_tag.equals("late"))
+						// give priority to "late" over "urgent" and "normal"
 						return 1;
 					else if(o1_tag.equals("normal") && o2_tag.equals("urgent"))
 						// give priority to "urgent" over "normal"
@@ -1468,17 +1703,17 @@ public class PurpleOpt {
 	}
 
 	@SuppressWarnings("unchecked")
-	static void tagUnassignedOrder(HashMap<String, Object> order, HashMap<String, Object> couriers, HashMap<String, Integer> google_distance_saved, Long currTime){
+	static void tagUnassignedOrder(HashMap<String, Object> order, HashMap<String, Object> couriers, Long currTime){
 		// get order's location
 		Double order_lat = (Double)order.get("lat");
 		Double order_lng = (Double)order.get("lng");
 		// initialize min score/ratio
 		double min_score = Double.MAX_VALUE; // for normal orders
-		double min_urgency_ratio = Double.MAX_VALUE;  // for tardy/urgent orders
+		double min_urgency_ratio = Double.MAX_VALUE;  // for late/urgent orders
 		// get service time
-		int service_duration = iOrderServingTime(order);
+		long service_duration = iOrderServingTime(order);
 		// get deadline
-		long order_deadline = GetLongTimeFrom(order,"target_time_end");
+		long order_deadline = getLongTimeFrom(order,"target_time_end");
 		// go over all couriers to determine the min_urgency_ratio and min_nonurgency_ratio
 		for(String courier_key: couriers.keySet()){
 			HashMap<String, Object> courier = (HashMap<String, Object>) couriers.get(courier_key);
@@ -1487,7 +1722,7 @@ public class PurpleOpt {
 				// get courier's finish position
 				Double courier_lat = (Double)courier.get("finish_lat");
 				Double courier_lng = (Double)courier.get("finish_lng");
-				int travel_duration = getGoogleDistance(courier_lat, courier_lng, order_lat, order_lng, google_distance_saved);
+				long travel_duration = googleDistanceGetByHttp(courier_lat, courier_lng, order_lat, order_lng);
 				// get courier's finish time
 				long finish_time = (Long)courier.get("finish_time");
 				// if this courier's finish time is earlier than the order's deadline 
@@ -1503,9 +1738,9 @@ public class PurpleOpt {
 			}
 		}
 
-		/* tag order with "tardy", "urgent" or "normal" */
+		/* tag order with "late", "urgent" or "normal" */
 		if(min_urgency_ratio > 1)
-			order.put("tag", "tardy");
+			order.put("tag", "late");
 		else if(min_urgency_ratio >= urgencyThreshold || order_deadline - currTime <= minsUrgencyThreshold * 60) {
 			order.put("tag", "urgent");
 			order.put("min_urgency_ratio", min_urgency_ratio);
@@ -1516,15 +1751,15 @@ public class PurpleOpt {
 		}
 	}	
 
-	// for each unassigned order return a score, which is computed separately for tardy, urgent, normal orders
-	static void scoreUnassignedOrder(HashMap<String, Object> order, HashMap<String, Object> couriers, HashMap<String, Integer> google_distance_saved, Long currTime){
+	// for each unassigned order return a score, which is computed separately for late, urgent, normal orders
+	static void scoreUnassignedOrder(HashMap<String, Object> order, HashMap<String, Object> couriers, Long currTime){
 		double score = 0.;
 		// get order's tag
 		String tag = (String)order.get("tag");
 
-		// compute scores separately for tardy, urgent, normal orders
-		if(tag.equals("tardy"))	// "tardy" order
-			score = (double)GetLongTimeFrom(order,"target_time_end");
+		// compute scores separately for late, urgent, normal orders
+		if(tag.equals("late"))	// "late" order
+			score = (double)getLongTimeFrom(order,"target_time_end");
 		else if(tag.equals("urgent")){ 		// "urgent" order
 			score = 1/((double)order.get("min_urgency_ratio")); // lower ratio go earlier
 		}
@@ -1536,10 +1771,11 @@ public class PurpleOpt {
 		return;
 	}
 
-	static Integer GetIntegerTimeFrom(HashMap<String,Object> hmap, String key) {
+/* correct, but not used any more
+	static Long GetIntegerTimeFrom(HashMap<String,Object> hmap, String key) {
 		Object val = (Object) hmap.get(key);
 		try {
-			Integer integerVal = (Integer) val;
+			Long integerVal = (Long) val;
 			return integerVal;
 		}
 		catch (Exception e) {
@@ -1547,21 +1783,25 @@ public class PurpleOpt {
 			return longVal.intValue();
 		}
 	}
+*/
 
-	static Long GetLongTimeFrom(HashMap<String,Object> hmap, String key) {
+	/* given a hashmap and a key for a time entry, return the Unix time (Long) */ 
+	static Long getLongTimeFrom(HashMap<String,Object> hmap, String key) {
 		Object val = (Object) hmap.get(key);
-		try {
-			Long integerVal = ((Integer) val).longValue();
-			return integerVal;
-		}
-		catch (Exception e) {
-			Long longVal = SimpleDateFormatToUnixTime((String)val);
-			return longVal;
+		
+		if (val instanceof Long) {
+			return (Long) val;
+		} else if (val instanceof Integer) {
+			return ((Integer) val).longValue();
+		} else if (val instanceof String) {
+			return SimpleDateFormatToUnixTime((String) val);
+		} else {
+			throw new IllegalArgumentException();
 		}
 	}
 
-	/* */
-	static Object ReturnTimeInRightFormat(Long unixTime) {
+	/* given a Unix time (Long), return an objective according to human_time_format */ 
+	static Object getTimeOutputInRightFormat(Long unixTime) {
 		if (human_time_format) {
 			return ((Object) UnixTimeToSimpleDateFormatNoDate(unixTime));
 		}
@@ -1569,7 +1809,21 @@ public class PurpleOpt {
 			return ((Object) unixTime);
 		}
 	}
+	
+	/* given a Unix time (Long), return an objective according to human_time_format */ 
+	static Object getTimeOutputInRightFormat(Long unixTime, Boolean hasDate) {
+		if (human_time_format) {
+			if (hasDate)
+				return ((Object) UnixTimeToSimpleDateFormat(unixTime));
+			else
+				return ((Object) UnixTimeToSimpleDateFormatNoDate(unixTime));
+		}
+		else {
+			return ((Object) unixTime);
+		}
+	}
 
+	/*
 	static List<List<HashMap<String,Object>>> clusterOrders(List<HashMap<String,Object>> listOrders, Long currTime) {
 		// initialize the output clusters (nested list)
 		List<List<HashMap<String,Object>>> clusters = new ArrayList<>();
@@ -1602,14 +1856,15 @@ public class PurpleOpt {
 		// return the output clusters
 		return clusters;
 	}
+	*/
 
 	/* test whether two orders are assigned to different couriers 
 	 * true if both have but have different couriers
 	 * false if (i) both have no courier, or (ii) only one has a courier, or (iii) both have the same courier */
 	static boolean bAssignedToDifferentCouriers(HashMap<String,Object> order1, HashMap<String,Object> order2) {
 		// get their assigned couriers, possibly null
-		String o1courier = (String) order1.get("courier_id"); // CAUTION: important change made
-		String o2courier = (String) order2.get("courier_id"); // CAUTION: important change made
+		String o1courier = (String) order1.get("courier_id");
+		String o2courier = (String) order2.get("courier_id");
 
 		// Perform the test
 		if (o1courier != null && o1courier.equals(o2courier))
@@ -1619,7 +1874,8 @@ public class PurpleOpt {
 			return false;
 	}
 
-	static int computeCrossZonePenalty(HashMap<String,Object> order, HashMap<String,Object> courier, HashMap<String,Object> orders, HashMap<String,Object> couriers) {
+	// if cross-zone servicing is allowed, compute its penalty
+	static long computeCrossZonePenalty(HashMap<String,Object> order, HashMap<String,Object> courier, HashMap<String,Object> orders, HashMap<String,Object> couriers) {
 		return 0; // this function is not implemented yet
 	}
 
@@ -1630,10 +1886,10 @@ public class PurpleOpt {
 		boolean human_time_format = (boolean) input.get("human_time_format");
 		// read orders hashmap
 		HashMap<String, Object> orders = (HashMap<String, Object>) input.get("orders");
-		int nOrders = orders.size();
+		long nOrders = orders.size();
 		// read couriers hashmap
 		HashMap<String, Object> couriers = (HashMap<String, Object>) input.get("couriers");
-		int nCouriers = couriers.size();
+		long nCouriers = couriers.size();
 
 		// list keys in input
 		System.out.println("Keys in the input: ");
@@ -1708,7 +1964,7 @@ public class PurpleOpt {
 			System.out.println("    id:  " + (String) order.get("id"));
 			System.out.println("    status: " + (String) order.get("status"));
 			System.out.println("    gas_type: " + (String) order.get("gas_type"));
-			System.out.println("    gallons: " + (Integer) order.get("gallons"));
+			System.out.println("    gallons: " + (Double) order.get("gallons"));
 			System.out.println("    lat: " + (Double) order.get("lat"));
 			System.out.println("    lng: " + (Double) order.get("lng"));
 			if (human_time_format) {
@@ -1780,11 +2036,27 @@ public class PurpleOpt {
 
 	// check whether a given finish_time no later than the order deadline 
 	static boolean bOnTimeFinish(HashMap<String,Object>order, long finish_time) {
-		long deadline = GetLongTimeFrom(order,"target_time_end");
+		long deadline = getLongTimeFrom(order,"target_time_end");
 		if (finish_time <= deadline)
 			return true;
 		else
 			return false;
 	}	
 
+	// compare two double numbers
+	static boolean nearlyEqual(double a, double b, double epsilon) {
+	    final double absA = Math.abs(a);
+	    final double absB = Math.abs(b);
+	    final double diff = Math.abs(a - b);
+
+	    if (a == b) { // shortcut, handles infinities
+	        return true;
+	    } else if (a == 0 || b == 0 || diff < Float.MIN_NORMAL) {
+	        // a or b is zero or both are extremely close to it
+	        // relative error is less meaningful here
+	        return diff < (epsilon * Float.MIN_NORMAL);
+	    } else { // use relative error
+	        return diff / (absA + absB) < epsilon;
+	    }
+	}
 }
