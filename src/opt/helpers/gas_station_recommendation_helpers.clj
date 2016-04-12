@@ -1,7 +1,8 @@
 (ns opt.helpers.gas-station-recommendation-helpers
   (:require [clj-http.client :as client]
             [clojure.data.json :as json]
-            [clojure-polyline.core :as polyline])
+            [clojure-polyline.core :as polyline]
+            [org.martinklepsch.cc-set :refer [set-by]])
   (:import  [java.io File]
             [java.util Date]))
 
@@ -193,6 +194,7 @@
     (json/read-str (slurp station-data-file) :key-fn keyword)
     remove-non-toptier-stations
     (remove-blacklisted-stations (:blacklist opt))   ;; comment: I expect blacklist to be stable. so, create a file with the blacklisted stations excluded. when the blacklist is updated, update the file. this will reduce the call to remove
+    (#(filter :prices %))
   ))
 
 (defn gas-stations
@@ -234,14 +236,24 @@
     (filter
       (fn [station]
         (contains?
-          (into
-            #{}
-            (map
-              (fn [point]
+          (reduce
+            (fn [coll point]
+              (let [waypoint-bid 
                 (lnglat-to-block-id
                   (:longitude point)
-                  (:latitude point)))
-              polyline))
+                  (:latitude point))]
+                (into coll [
+                  waypoint-bid])))
+                  ; (inc waypoint-bid)
+                  ; (dec waypoint-bid)
+                  ; (+ waypoint-bid 18000)
+                  ; (- waypoint-bid 18000)
+                  ; (+ (inc waypoint-bid) 18000)
+                  ; (- (dec waypoint-bid) 18000)
+                  ; (+ (dec waypoint-bid) 18000)
+                  ; (- (inc waypoint-bid) 18000)])))
+            #{}
+            polyline)
           (:block_id station)))
       (gas-stations opt)))
   ([src-lng src-lat dst-lng dst-lat opt] (suggest-gas-stations (get-route-polyline src-lng src-lat dst-lng dst-lat) opt)))
@@ -285,7 +297,7 @@
 (defn suggest-gas-stations-with-driving-time 
   [src-lng src-lat dst-lng dst-lat opt] 
   (let [suggested-stations (suggest-gas-stations src-lng src-lat dst-lng dst-lat opt)]
-    (map (fn [station]
+    (pmap (fn [station]
            {:station station
             :total-driving-time (driving-time-between src-lat src-lng dst-lat dst-lng (:lat station) (:lng station) {})})
          suggested-stations)))
@@ -373,17 +385,17 @@
     (= block1 block2)
     (= block1 (inc block2))
     (= block1 (dec block2))
-    (= block1 (+ 18000 block2))
-    (= block1 (- 18000 block2))
-    (= (inc block1) (+ 18000 block2))
-    (= (inc block1) (- 18000 block2))
-    (= (dec block1) (+ 18000 block2))
-    (= (dec block1) (- 18000 block2))))
+    (= block1 (+ block2 18000))
+    (= block1 (- block2 18000))
+    (= (inc block1) (+ block2 18000))
+    (= (inc block1) (- block2 18000))
+    (= (dec block1) (+ block2 18000))
+    (= (dec block1) (- block2 18000))))
 
-(defn suggest-gas-stations-near-with-score
+(defn suggest-gas-stations-near-with-score-price-based
   [src-lng src-lat opt]
       (->>
-        (take 20
+        (take 5  
           (sort-by 
             :distance
             <
@@ -394,7 +406,108 @@
                   :distance (compute-distance station {:lat src-lat :lng src-lng})
                   })
               (gas-stations opt))))
+        (pmap
+          (fn [elem]
+            (assoc 
+              elem 
+              :total-driving-time 
+              (driving-time-between 
+                src-lat 
+                src-lng 
+                (:lat (:station elem)) 
+                (:lng (:station elem)) 
+                {}))))
         (map
+          (fn [elem]
+            (assoc elem :price-modifier
+              (if (get-station-reg-price (:station elem))
+                (/ (get-station-reg-price (:station elem)) (avg-gasprice-reg (gas-stations opt)))
+                1.0))))
+        ; (map 
+        ;   (fn [elem]
+        ;     (assoc elem :arco-modifier
+        ;       (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
+        ;         0.8
+        ;         1.0))))
+        (filter
+          (fn [elem]
+            (< (:total-driving-time elem) 1000)))
+        (sort-by
+          :price-modifier
+          <)
+        (map
+          (fn [elem]
+            ; (println elem)
+            (assoc elem :score (* (:price-modifier elem) 1000))))
+        ))
+
+(defn suggest-gas-stations-with-score-price-based 
+  [src-lng src-lat dst-lng dst-lat opt]
+  (let [results (suggest-gas-stations-with-driving-time src-lng src-lat dst-lng dst-lat opt)
+        avg (avg-gasprice-reg (gas-stations opt))
+        straight-driving-time (driving-time-between src-lat src-lng dst-lat dst-lng nil)]
+    (->>
+      (map
+        (fn [elem]
+          (assoc elem :price-modifier
+            (if (get-station-reg-price (:station elem))
+              (/ (get-station-reg-price (:station elem)) avg)
+              1.0)))
+        results)
+      ; (map 
+      ;   (fn [elem]
+      ;     (assoc elem :arco-modifier
+      ;       (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
+      ;         0.8
+      ;         1.0))))
+      ; (map 
+      ;   (fn [elem]
+      ;     (assoc elem :additional-driving-time
+      ;       (- (:total-driving-time elem) straight-driving-time))))
+      ; (filter
+      ;   (fn [elem]
+      ;     (<
+      ;       (:additional-driving-time elem)
+      ;       300)))
+      ; (map
+      ;   (fn [elem]
+      ;     ; (println elem)
+      ;     (assoc elem :score
+      ;       (*
+      ;         (:total-driving-time elem)
+      ;         (:price-modifier elem)
+      ; ;         (:arco-modifier elem)))))
+      (into
+        (suggest-gas-stations-near-with-score-price-based dst-lng dst-lat opt))
+      (into
+        (set-by :station))
+      (into
+        [])
+      (sort-by
+        :price-modifier
+        <)
+      (take 5)
+      (map
+        (fn [elem]
+          ; (println elem)
+          (assoc elem :score (* (:price-modifier elem) 1000))))
+    )))
+
+(defn suggest-gas-stations-near-with-score
+  [src-lng src-lat opt]
+      (->>
+        (take 5  
+          (sort-by 
+            :distance
+            <
+            (map
+              (fn [station]
+                {
+                  :station station
+                  :distance (compute-distance station {:lat src-lat :lng src-lng})
+                  })
+              (gas-stations opt))))
+        (pmap
           (fn [elem]
             (assoc 
               elem 
@@ -424,5 +537,4 @@
               (*
                 (:total-driving-time elem)
                 (:price-modifier elem)
-                (:arco-modifier elem)))))
-        ))
+                (:arco-modifier elem)))))))
