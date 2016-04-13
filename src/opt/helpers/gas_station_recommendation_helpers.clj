@@ -2,13 +2,14 @@
   (:require [clj-http.client :as client]
             [clojure.data.json :as json]
             [clojure-polyline.core :as polyline]
-            [org.martinklepsch.cc-set :refer [set-by]])
+            [org.martinklepsch.cc-set :refer [set-by]]
+            [common.config :as config])
   (:import  [java.io File]
             [java.util Date]))
 
 (def station-data-file "stations.json") ;; comment: put "LA" and "gas" somewhere; next consider making a key-value pair like: LA: "parameters to get LA gas stations from mapquest" so it will be easier for us to turn on another city
 (def mapquest-box-step 2)
-(def google-api-key "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE") ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
+(def google-api-key config/dashboard-google-browser-api-key) ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
 (def gas-stations-atom (atom {}))
 (def avg-gasprice-reg-atom (atom 0))
 (defn gen-grids-helper [br-lat br-lng tl-lat tl-lng og-lng coll] ;; please define the abbr and add some English to explain what you do here
