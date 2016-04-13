@@ -411,7 +411,7 @@
           (fn [elem]
             (assoc 
               elem 
-              :total-driving-time 
+              :driving-time 
               (driving-time-between 
                 src-lat 
                 src-lng 
@@ -432,7 +432,7 @@
         ;         1.0))))
         (filter
           (fn [elem]
-            (< (:total-driving-time elem) 1000)))
+            (< (:driving-time elem) 1000)))
         (sort-by
           :price-modifier
           <)
