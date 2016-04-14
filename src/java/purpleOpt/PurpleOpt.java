@@ -41,6 +41,8 @@ General INPUT (for major functions):
 	"current_time": (optional) SimpleDateFormat (if human_time_format is true) or UnixTime (if human_time_format is false)
 	"verbose_output": (optional) true / false (default); if true, output will add the following fields:
 	                   ->[order ID]->status, ->sorted_order_list, ->luster_list, ->unprocessed_list
+	"simulation_mode": (optional) true / false (default); if true, google API calls will use departure_time=currTime+(52 weeks) and google_duration_cache will not be cleaned
+	"google_api_calls": (optional) Integer; if not specified, it will be reset to 0
  */
 
 /* int (Integer) vs long (Long)
@@ -52,8 +54,6 @@ public class PurpleOpt {
 
 	/*--- global parameters --*/
 
-	/* current time */
-	static long currTime;
 	/* global printing switch */
 	static boolean bPrint = false; // CAUTION, use false for release
 	/* Google API key */
@@ -81,14 +81,20 @@ public class PurpleOpt {
 	/* estimated l1 distance threshold for locations equaling in search saved google distance*/
 	static double sameLocationTolerance = 0.0005; // this value roughly equals half a street block
 	
-	/* verbose output switch */
-	static boolean verbose_output = false;
+	/* current time */
+	static long currTime;
 	/* human time format switch (only for input and output) */
 	static boolean human_time_format = false; // if true, input and output will use human readable time format
+	/* working time, which is a specific future time for simulation and current time for realistic use */
+	static boolean simulation_mode = false;
+	/* verbose output switch */
+	static boolean verbose_output = false;
+	/* number of google API calls */
+	static int google_api_calls = 0;
+	
 	/* save Google distance according to origin lat-lng and dest lat-lng */
-	// [org+dest] (String):
-	//    "timestamp": timestamp (Integer or String);
-	//    "duration_in_traffic": duration_in_traffic (Long);
+	// (org_lat,org_lng,dest_lat,dest_lng) (Double[]):
+	//    timestamp (Long) : duration_in_traffic (Long);
 	static HashMap<Double[], Object> google_duration_cache = new HashMap<Double[], Object>();
 	/* duration of validation for google distance saved*/
 	static long google_duration_valid_limit = 15 * 60;
@@ -107,6 +113,8 @@ public class PurpleOpt {
         sorted_order_list: (if verbose) the list of orders internally sorted, given in order_id's
         cluster_list: (if verbose) the list of order clusters, given in order_id's
         unprocessed_list: (if verbose) the list of unprocessed orders, given in order_id's
+        google_api_calls: (if verbose) the number of google API calls made
+        google_duration_cache: (if verbose) the google duration cache
     NOTE: if there is no unassigned order in the input, an empty LinkedHashmap (instead of null) will be returned
 	}
 	 */
@@ -117,23 +125,49 @@ public class PurpleOpt {
 		Object value = input.get("human_time_format");
 		if (value == null)
 			human_time_format = false;
-		else
+		else if (value instanceof Boolean)
 			human_time_format = (boolean) value;
+		else
+			throw new IllegalArgumentException();
+		
 		// get current time from either the input or, if missing from the input, the system
 		currTime = getCurrUnixTime(input);
-
+		
+		// get "simulation_mode" from input
+		value = input.get("simulation_mode");
+		if (value == null)
+			simulation_mode = false;
+		else if (value instanceof Boolean)
+			simulation_mode = (boolean) value;
+		else
+			throw new IllegalArgumentException();
+		
+		// get "verbose_output" from input
 		value = input.get("verbose_output");
 		if (value == null)
 			verbose_output = false;
-		else
+		else if (value instanceof Boolean)
 			verbose_output = (boolean) value;
+		else
+			throw new IllegalArgumentException();		
 		
+		// get initial "google_api_calls" from input
+		value = input.get("google_api_calls");
+		if (value == null)
+			google_api_calls = 0;
+		else if (value instanceof Long || value instanceof Integer)
+			google_api_calls = (int) value;
+		else
+			throw new IllegalArgumentException();	
 		
 		// initialize output HashMap
 		LinkedHashMap<String,Object> outHashMap = new LinkedHashMap<>();
 
-		// remove saved distances which are out of date
-		googleDistanceCacheClean(currTime);
+		if(!simulation_mode){
+			// remove cached distances that are out of date
+			// in simulation mode, all distances are cached for future re-simulation
+			googleDistanceCacheClean(currTime);
+		}
 		
 		// obtain orders from the input
 		HashMap<String, Object> orders = (HashMap<String, Object>) input.get("orders");
@@ -190,28 +224,37 @@ public class PurpleOpt {
 		// extract information from orders to outHashMap
 		outputUpdate(orders, outHashMap);
 		
-		// collect unprocessed orders
-		if (verbose_output)
+		if (verbose_output){
+			// collect unprocessed orders
 			outHashMap.put("unprocessed_list", sorted_orders);
-		
-		// collect google distance
-		if (verbose_output)
+			// number of google API calls
+			outHashMap.put("google_api_calls", google_api_calls);
+			// collect google distance
 			outHashMap.put("google_duration_cache", google_duration_cache);
+		}
 		
 		return outHashMap;
 	}
 	
-  @SuppressWarnings("unchecked")
+	// remove cached distances that are out of date
+	@SuppressWarnings("unchecked")
 	static void googleDistanceCacheClean(long currTime){
+		// traverse all the keys
 		for(Double[] org_dest_key : google_duration_cache.keySet()){
-			HashMap<String, Object> record = (HashMap<String, Object>)google_duration_cache.get(org_dest_key);
-			if(Math.abs(currTime - getLongTimeFrom(record,"timestamp")) > google_duration_valid_limit){
-				// the distance saved is out of date, remove it
-				google_duration_cache.remove(org_dest_key);
+			// get the record for the org-dest pair
+			HashMap<Long, Long> record = (HashMap<Long, Long>)google_duration_cache.get(org_dest_key);
+			// traverse all the time stamps
+			for(Long timestamp : record.keySet()){
+				// if it is too old, remove it
+				if(currTime - timestamp > google_duration_valid_limit)
+					record.remove(timestamp);
 			}
+			// if the record is empty, remove it from the cache
+			if (record.size() == 0)
+				google_duration_cache.remove(org_dest_key);
 		}
 	}
-	
+
   	// Based on the computation, update output LinkedHashMap
 	@SuppressWarnings("unchecked")
 	static void outputUpdate(HashMap<String, Object> orders, LinkedHashMap<String, Object> outHashMap){
@@ -489,6 +532,15 @@ public class PurpleOpt {
 	@SuppressWarnings("unchecked")
 	public static HashMap<String, Object> computeDistance(HashMap<String,Object> input) {
 
+		// get initial "google_api_calls" from input
+		Object value = input.get("google_api_calls");
+		if (value == null)
+			google_api_calls = 0;
+		else if (value instanceof Long || value instanceof Integer)
+			google_api_calls = (int) value;
+		else
+			throw new IllegalArgumentException();	
+
 		// get current time in the Unix time format
 		// long currTime = System.currentTimeMillis() / 1000L; // not used any more
 
@@ -623,9 +675,7 @@ public class PurpleOpt {
 			return (outHashmap);
 	}
 	
-	/* return the all-pair google distance for a list of origins and destinations 
-	 * TODO: add an option to feed user specified time of travel
-	 */
+	/* return the all-pair google distance for a list of origins and destinations */
 	public static List<List<Long>> googleDistanceMatrixGetByHttp(List<String> org_latlngs, List<String> dest_latlngs) {
 		int nOrgs = org_latlngs.size();
 		int nDests = dest_latlngs.size();
@@ -671,6 +721,8 @@ public class PurpleOpt {
 			url = new URL(reqURL);
 			conn = (HttpURLConnection) url.openConnection();
 			conn.setRequestMethod("GET");
+
+			google_api_calls += nOrgs*nDests;
 
 			// retrieve the results
 			BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
@@ -822,6 +874,7 @@ public class PurpleOpt {
 		
 		return currTime;
 	}
+	
 
 	/* For each courier, set their status (lat,lng,time) when they finish their already-assigned orders)
 	 * If they have no assigned order, use their current status.
@@ -866,15 +919,12 @@ public class PurpleOpt {
 		if (bValid == null || (!bValid)) {
 			// get the courier's total assigned orders
 			List<String> temp_list = (List<String>)courier.get("assigned_orders");
+			// obtain the first order of this courier for computing its etf
 			if (!temp_list.isEmpty()) {
 				HashMap<String,Object> firstOrder = (HashMap<String, Object>) orders.get(temp_list.get(0));
 				if ((firstOrder.get("status")).equals("enroute") || (firstOrder.get("status")).equals("servicing"))
 					assigned_orders_keys.add(temp_list.get(0));
 			}
-			// obtain get the first order of this courier for computing its etf
-			if(!((List<String>)courier.get("assigned_orders")).isEmpty())
-				assigned_orders_keys.add(((List<String>)courier.get("assigned_orders")).get(0));
-			
 		}
 		else
 			// get the courier's total assigned orders
@@ -1217,34 +1267,56 @@ public class PurpleOpt {
 			if(googleDistanceZero(origin_lat, origin_lng, saved_org_lat, saved_org_lng, sameLocationTolerance) &&
 			   googleDistanceZero(dest_lat,   dest_lng,   saved_des_lat, saved_des_lng, sameLocationTolerance)   ){
 				// get saved record in google_duration_cache
-				HashMap<String, Object> record = (HashMap<String, Object>) google_duration_cache.get(org_dest_key);
-				// get saved timestamp
-				if(Math.abs(currTime - getLongTimeFrom(record,"timestamp")) <= google_duration_valid_limit)
-						return (Long)record.get("duration_in_traffic");
+				HashMap<Long,Long> record = (HashMap<Long,Long>) google_duration_cache.get(org_dest_key);
+				// look through all the time stamps
+				for(Long timestamp : record.keySet()){
+					// return the cache if its time stamp is with currTime +/- google_duration_valid_limit 
+					if(Math.abs(currTime - timestamp) <= google_duration_valid_limit)
+						return record.get(timestamp);
+				}
 				// do not remove record here to avoid concurrent modification
 			}
 		}
-		// if not found in saved records, return 0
+		// if not found in cache, return -1 (Note: returning 0 is not safe because 0 is a valid duration)
 		return -1;
+	}
+	
+	// given org_lat/lng and dest_lat/lng, look up google_duration_cache to find a roughly matching record; if not found, return null
+	@SuppressWarnings("unchecked")
+	static HashMap<Long,Long> googleDistanceLocationLookup(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
+		// traverse all pairs of org_lat/lng and dest_lat/lng
+		for(Double[] org_dest_key : google_duration_cache.keySet()){
+			Double saved_org_lat = org_dest_key[0];
+			Double saved_org_lng = org_dest_key[1];
+			Double saved_des_lat = org_dest_key[2];
+			Double saved_des_lng = org_dest_key[3];
+		
+			// target origin and dest are close to a pair of saved records
+			if(googleDistanceZero(origin_lat, origin_lng, saved_org_lat, saved_org_lng, sameLocationTolerance) &&
+			   googleDistanceZero(dest_lat,   dest_lng,   saved_des_lat, saved_des_lng, sameLocationTolerance)){
+				return (HashMap<Long,Long>)google_duration_cache.get(org_dest_key);
+			}
+		}
+		// not found
+		return null;
 	}
 
 	// after calling google API, save the distance
-	static long googleDistanceAddToCache(long seconds, Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
-		// create key
-		Double[] org_dest_key = {origin_lat,origin_lng,dest_lat,dest_lng};
-		// create record structure for distance_key
-		HashMap<String, Object> record = new HashMap<String, Object>(); 
-		// write record
-		record.put("timestamp", getTimeOutputInRightFormat(currTime, true));	// true means includes date
-		record.put("duration_in_traffic", seconds);
-		// write in global saving vessel
-		google_duration_cache.put(org_dest_key, record);
-		return 0;
+	static void googleDistanceAddToCache(long seconds, Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
+		// check if the (rough) location already exists
+		HashMap<Long,Long> record = googleDistanceLocationLookup(origin_lat, origin_lng, dest_lat, dest_lng);
+		// if not, create a new record and add it to google_duration_cache
+		if (record == null) {
+			Double[] org_dest_key = {origin_lat,origin_lng,dest_lat,dest_lng};
+			record = new HashMap<Long, Long>();
+			google_duration_cache.put(org_dest_key, record);
+		}
+		
+		// add the entry timestamp:duration to the record
+		record.put(currTime, seconds);
 	}
-	
-	/* return the google distance for a courier to an order 
-	 * TODO: add an option for a user specified time
-	 */
+
+	/* return the google distance for a courier to an order */
 	public static long googleDistanceGetByHttp(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng) {
 
 		// check if the origin and dest are the same place
@@ -1267,7 +1339,12 @@ public class PurpleOpt {
 
 			// generate request URL 
 			String reqURL = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=" + org + "&destinations=" + dest;
-			reqURL += "&departure_time=now";
+			// under simulation_mode, use currTime+52 weeks because currTime is not the real current time
+			if(simulation_mode)
+				reqURL += "&departure_time=" + (currTime + 31449600);
+			else
+				reqURL += "&departure_time=now";
+
 			reqURL += "&key=" + google_api_key;
 
 			// debug display
@@ -1284,6 +1361,8 @@ public class PurpleOpt {
 				conn = (HttpURLConnection) url.openConnection();
 				conn.setRequestMethod("GET");
 				conn.setConnectTimeout(5000);
+				
+				google_api_calls++;
 
 				BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
 				String line;

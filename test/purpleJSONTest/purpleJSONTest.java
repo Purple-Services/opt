@@ -13,8 +13,9 @@ public class purpleJSONTest {
 	@SuppressWarnings("unchecked")
 	public static void main(String[] args){
 		/* input file */
-		String inputFileName = "test_20160225.json";
-        File jsonFile = new File(inputFileName);
+		String inputFileFolder = "test/purpleJSONTest/";
+		String inputFileName = "test_20160409.json";
+        File jsonFile = new File(inputFileFolder+inputFileName);
         
         /* use the next line if we want to reuse mapper */
         /* ObjectMapper mapper = new ObjectMapper(); */
