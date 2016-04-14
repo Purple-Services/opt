@@ -1,0 +1,55 @@
+Changelog
+=========
+March 28, 2016
+* Add a new recommendation algorithm for drivers not on their tasks
+  - This algorithm does not use Google Directions API but use straight line
+    distance
+* Add a new scoring algorithm for recommendations
+  - The score is better if it is near the driver or near the route of the 
+    task
+  - The score is better if a station has a price lower than average
+  - The score is better if a station is an Arco station
+* Improve the gas station scrapping mechanism to include almost 8000 
+  stations
+  - If the price data for a station are blank, the average price is 
+    used for scoring
+* Remove all non-first-tier stations from recommendations
+
+======================================
+Some notes on implementation for Wotao
+======================================
+* update-local-station-file at gas_station_recommendation_helpers.clj:164 *
+---
+This routine collects gas station data from MapQuest. In sketch, it
+grabs gas station data with price from the old API, and then it grabs
+those with no price information from the new API, and tries to merge
+them. (See our discussion history) To merge, it traverses the new
+data list and sees if the old data list has had an entry for each
+station. If true, it leaves the old list unchanged; otherwise, it
+formats the station in the new data list and inserts it to the old
+list. Finally, it writes the augmented old list to the file system.
+---
+* gas-stations at gas_station_recommendation_helpers.clj:187 *
+---
+This routine reads the local stations data. After finishing reading,
+it removes all non-top-tier stations and blacklisted stations.
+---
+* suggest-gas-stations-with-score at gas_station_recommendation_helpers.clj:295 *
+---
+This routine first calls our old routine for distance calculation,
+then thread the result with a series of computations. By these computations,
+the routine knows (1) how low is the price of a station compared to the
+average; (2) if a station is an Arco station. Finally, the routine
+gives a final score to each station using the following formula:
+%% score = (price / avg_price) * (arco ? 0.8 : 1.0) * driving_time %%
+---
+* suggest-gas-stations-near-with-score at gas_station_recommendation_helpers.clj:330 *
+---
+Similar to the previous one, but this routine computes the point to point
+distance instead of the driving time from the driver to each station.
+Therefore, the formula is slightly changed to:
+%% score = (price / avg_price) * (arco ? 0.8 : 1.0) * distance * 1000 %%
+Note that the distance is approximated by viewing latitudes and longitudes
+as Cartesian coordiates.
+
+
