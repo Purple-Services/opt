@@ -40,9 +40,12 @@ General INPUT (for major functions):
 	"human_time_format": (optional) true / false (default);
 	"current_time": (optional) SimpleDateFormat (if human_time_format is true) or UnixTime (if human_time_format is false)
 	"verbose_output": (optional) true / false (default); if true, output will add the following fields:
-	                   ->[order ID]->status, ->sorted_order_list, ->luster_list, ->unprocessed_list
+	                   ->[order ID]->status, ->sorted_order_list, ->cluster_list, ->unprocessed_list, ->google_api_calls, ->google_duration_cache
 	"simulation_mode": (optional) true / false (default); if true, google API calls will use departure_time=currTime+(52 weeks) and google_duration_cache will not be cleaned
 	"google_api_calls": (optional) Integer; if not specified, it will be reset to 0
+	"google_duration_cache": (optional) HashMap:
+		[org_lat,org_lng,dest_lat,dest_lng] (Double[]):
+			[timestamp] (Long) : [duration_in_traffic] (Long);
  */
 
 /* int (Integer) vs long (Long)
@@ -92,9 +95,11 @@ public class PurpleOpt {
 	/* number of google API calls */
 	static int google_api_calls = 0;
 	
-	/* save Google distance according to origin lat-lng and dest lat-lng */
-	// (org_lat,org_lng,dest_lat,dest_lng) (Double[]):
-	//    timestamp (Long) : duration_in_traffic (Long);
+	/* save Google distance according to origin lat-lng and dest lat-lng
+	 * HashMap:
+		[org_lat,org_lng,dest_lat,dest_lng] (Double[]):
+			[timestamp] (Long) : [duration_in_traffic] (Long);
+	*/
 	static HashMap<Double[], Object> google_duration_cache = new HashMap<Double[], Object>();
 	/* duration of validation for google distance saved*/
 	static long google_duration_valid_limit = 15 * 60;
@@ -159,6 +164,15 @@ public class PurpleOpt {
 			google_api_calls = (int) value;
 		else
 			throw new IllegalArgumentException();	
+		
+		// get initial "google_duration_cache" from input; if null, do nothing
+		value = input.get("google_duration_cache");
+		if (value != null){
+			if (value instanceof HashMap)
+				google_duration_cache = (HashMap<Double[], Object>) value;
+			else
+				throw new IllegalArgumentException();
+		}
 		
 		// initialize output HashMap
 		LinkedHashMap<String,Object> outHashMap = new LinkedHashMap<>();
