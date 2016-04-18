@@ -107,7 +107,13 @@
   (+ (+ 9000 (int (Math/floor (* 100 lat))))
      (* 18000 (+ 18000 (int (Math/floor (* 100 lng)))))))
 
-(defn get-station-street [station] (get-in station ["GeoAddress" "Street"]))
+(defn get-station-street
+  [station]
+  (str 
+    (get-in station ["GeoAddress" "Street"]) ", "
+    (get-in station ["GeoAddress" "AdminArea5"]) ", "
+    (get-in station ["GeoAddress" "AdminArea3"]) " "
+    (get-in station ["GeoAddress" "PostalCode"])))
 (defn get-station-lng [station] (get-in station ["GeoAddress" "LatLng" "Lng"]))  ;; comment: put next line before this line
 (defn get-station-lat [station] (get-in station ["GeoAddress" "LatLng" "Lat"]))
 (defn get-station-brand [station] (get-in station ["name"]))
@@ -160,18 +166,35 @@
       coll)))
 
 (defn generate-json-object
-  [stations-with-price stations-all] 
+  [stations-with-price] 
   (let [stations (map generate-station-object-with-price stations-with-price)]
-    (reduce stations-merge-helper stations stations-all)))
+    stations))
 
 (defn update-local-stations-file
   "Update local cache of stations."
-  []
-  (let [station-data (generate-json-object (get-los-angeles-stations-with-price 33.0 -119.0 35.0 -117.0) (get-los-angeles-stations-all 33.0 -119.0 35.0 -117.0))]
-    (do (spit station-data-file (json/write-str station-data))
-        station-data)))
+  [opt]
+  (let [station-data (generate-json-object (get-los-angeles-stations-with-price 33.0 -119.0 35.0 -117.0))]
+    (if (:extra_stations_file opt)
+      (let [extra-stations-from-file (json/read-str (slurp (:extra_stations_file opt)) :key-fn keyword)]
+        (spit 
+          station-data-file
+          (json/write-str
+            (into
+              station-data
+              (map
+                (fn [station]
+                  (assoc 
+                    station 
+                    :block_id
+                    (lnglat-to-block-id
+                      (:lng station)
+                      (:lat station))))
+                extra-stations-from-file)))))
+      (spit 
+          station-data-file
+          (json/write-str
+            station-data)))))
 
-;; TODO: test me.
 (defn remove-blacklisted-stations   ;; comment: does filter parallelize like in map-reduce? I am concerned about the efficiency once black list becomes long
   [stations blacklist]
   (filter 
