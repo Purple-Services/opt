@@ -18,3 +18,5 @@ profiles.clj
 *.json
 !/test/purpleJSONTest/*.json
 !/extra.json
+*~
+/*~
