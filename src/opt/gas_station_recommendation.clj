@@ -24,9 +24,9 @@
   ([src-lat src-lng opt]
    (helpers/suggest-gas-stations-near-with-score-price-based src-lng src-lat opt))
   ([src-lat src-lng dst-lat dst-lng opt]
-   (helpers/suggest-gas-stations-near-with-score-price-based src-lng src-lat dst-lng dst-lat opt)))
+   (helpers/suggest-gas-stations-with-score-price-based src-lng src-lat dst-lng dst-lat opt)))
 
 ;; Call every Sunday
-;; (update-local-stations-data {:extra_stations_file "extra.json"})
+;; (update-local-stations-data {:extra_stations_file "resources/gas-stations/stations.json"})
 ;; (update-local-stations-data {})
 ;; (compute-suggestions 33.997034 -118.428448 {})
