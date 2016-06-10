@@ -7,7 +7,12 @@
   (:import  [java.io File]
             [java.util Date]))
 
-(def station-data-file "resources/gas-stations/stations.json") ;; comment: put "LA" and "gas" somewhere; next consider making a key-value pair like: LA: "parameters to get LA gas stations from mapquest" so it will be easier for us to turn on another city
+;; comment: put "LA" and "gas" somewhere; next consider making a key-value pair
+;; like: LA: "parameters to get LA gas stations from mapquest" so it will be
+;; easier for us to turn on another city
+(def station-data-file
+  (clojure.java.io/resource "gas-stations/stations.json"))
+  
 (def mapquest-box-step 2)
 (def google-api-key config/dashboard-google-browser-api-key) ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
 (def gas-stations-atom (atom {}))
