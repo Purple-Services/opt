@@ -12,7 +12,7 @@
 ;; easier for us to turn on another city
 (def station-data-file
   (clojure.java.io/resource "gas-stations/stations.json"))
-  
+
 (def mapquest-box-step 2)
 (def google-api-key config/dashboard-google-browser-api-key) ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
 (def gas-stations-atom (atom {}))
@@ -228,7 +228,7 @@
   [opt]
   (do
     ;; (if (empty? @gas-stations-atom)
-      (swap! gas-stations-atom gas-stations-helper opt)
+    (swap! gas-stations-atom gas-stations-helper opt)
     ;; )
     @gas-stations-atom))
 
@@ -420,54 +420,40 @@
 
 (defn suggest-gas-stations-near-with-score-price-based
   [src-lng src-lat opt]
-  (->>
-   (take 5
-         (sort-by 
-          :distance
-          <
-          (map
-           (fn [station]
-             {
-              :station station
-              :distance (compute-distance station {:lat src-lat :lng src-lng})
-              })
-           (gas-stations opt))))
-   (pmap
-    (fn [elem]
-      (assoc 
-       elem 
-       :driving-time 
-       (driving-time-between 
-        src-lat 
-        src-lng 
-        (:lat (:station elem)) 
-        (:lng (:station elem)) 
-        {}))))
-   (map
-    (fn [elem]
-      (assoc elem :price-modifier
-             (if (get-station-reg-price (:station elem))
-               (/ (get-station-reg-price (:station elem)) (avg-gasprice-reg (gas-stations opt)))
-               1.0))))
-                                        ; (map 
-                                        ;   (fn [elem]
-                                        ;     (assoc elem :arco-modifier
-                                        ;       (if (.contains (.toLowerCase (:brand (:station elem))) "arco")
-                                        ;         0.8
-                                        ;         1.0))))
-   (filter
-    (fn [elem]
-      (< (:driving-time elem)
-         1000
-         )))
-   (sort-by
-    :price-modifier
-    <)
-   (map
-    (fn [elem]
-                                        ; (println elem)
-      (assoc elem :score (* (:price-modifier elem) 1000))))
-   ))
+  (let [avg-price (avg-gasprice-reg (gas-stations opt))]
+    (->>
+     (take 10
+           ;; 50 is good for a single call of this func, but not safe when
+           ;; suggest-gas-stations-near-with-score-price-based is called
+           (sort-by 
+            :distance
+            <
+            (map
+             (fn [station]
+               {:station station
+                :distance (compute-distance station {:lat src-lat :lng src-lng})})
+             (gas-stations opt))))
+     (pmap (fn [elem]
+             (assoc 
+              elem 
+              :driving-time 
+              (driving-time-between 
+               src-lat 
+               src-lng 
+               (:lat (:station elem)) 
+               (:lng (:station elem)) 
+               {}))))
+     (filter (fn [elem]
+               (< (:driving-time elem)
+                  1200 ; 20 minutes (was: 1000)
+                  )))
+     (map (fn [elem]
+            (assoc elem :price-modifier
+                   (if (get-station-reg-price (:station elem))
+                     (/ (get-station-reg-price (:station elem)) avg-price)
+                     1.0))))
+     (sort-by :price-modifier <)
+     (map (fn [elem] (assoc elem :score (* (:price-modifier elem) 1000)))))))
 
 (defn suggest-gas-stations-with-score-price-based 
   [src-lng src-lat dst-lng dst-lat opt]
@@ -516,10 +502,7 @@
       <)
      (take 5)
      (map
-      (fn [elem]
-                                        ; (println elem)
-        (assoc elem :score (* (:price-modifier elem) 1000))))
-     )))
+      (fn [elem] (assoc elem :score (* (:price-modifier elem) 1000)))))))
 
 (defn suggest-gas-stations-near-with-score
   [src-lng src-lat opt]
