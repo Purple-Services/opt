@@ -1,5 +1,8 @@
 (ns clojure-polyline.core)
 
+;; Copyright © 2012 Michael Gaare
+;; Distributed under the Eclipse Public License, the same as Clojure.
+
 ;; -------------------------------------------------------
 ;; Utility functions
 ;; -------------------------------------------------------
