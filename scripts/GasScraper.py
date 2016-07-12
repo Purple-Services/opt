@@ -129,4 +129,4 @@ for i in range(len(pages)):
 print(stations)
 
 # Prints information to csv file
-stations.to_json('stations.csv', orient='records')
+stations.to_json('stations.json', orient='records')
