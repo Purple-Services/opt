@@ -1,4 +1,4 @@
-# Usage: Install lxml (pip install lxml) and pandas (pip install pandas) before running script
+# Usage: Install lxml (pip install lxml), cssselect (pip install cssselect), and pandas (pip install pandas) before running script
 # Run with Python 3
 
 from lxml import html
