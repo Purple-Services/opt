@@ -113,6 +113,7 @@ public class PurpleOpt {
           "new_assignment": [(boolean) true if it is a new suggested assignment; false if it is an existing assignment],
           "courier_pos": [(Integer) the position of the order in the courier's queue (1 based); null if cannot be determined]
           "etf": [(Integer) estimated finish time; null if cannot be computed],
+          "cluster_first_order": [(String) null if not in a cluster; otherwise, the ID of the first order in the cluster, possibly this order itself]
           "status_at_input": (if verbose) [(String) the same status given in the input]
           }
         sorted_order_list: (if verbose) the list of orders internally sorted, given in order_id's
@@ -228,7 +229,7 @@ public class PurpleOpt {
 		// initialize output cluster_list
 		List<List<String>> cluster_list = new ArrayList<>();
 		
-		// cluster and assign orders to couriers
+		// cluster orders and assign orders/clusters to couriers
 		assignOrders(cluster_list, orders, sorted_orders, couriers, currTime);
 		
 		// save cluster_list if verbose
@@ -273,16 +274,17 @@ public class PurpleOpt {
 	@SuppressWarnings("unchecked")
 	static void outputUpdate(HashMap<String, Object> orders, LinkedHashMap<String, Object> outHashMap){
 		for(String order_key: orders.keySet()){
-			LinkedHashMap<String, Object> output_entry = (LinkedHashMap<String, Object>)outHashMap.get(order_key);
+			LinkedHashMap<String, Object> output_order = (LinkedHashMap<String, Object>)outHashMap.get(order_key);
 			HashMap<String, Object> order = (HashMap<String, Object>)orders.get(order_key);
-			output_entry.put("new_assignment", order.get("new_assignment"));
-			output_entry.put("courier_id", order.get("courier_id"));
-			output_entry.put("courier_pos", order.get("courier_pos"));
+			output_order.put("new_assignment", order.get("new_assignment"));
+			output_order.put("courier_id", order.get("courier_id"));
+			output_order.put("courier_pos", order.get("courier_pos"));
+			output_order.put("cluster_first_order", order.get("cluster_first_order"));
 			if (order.get("etf") == null)
-				output_entry.put("etf", null);
+				output_order.put("etf", null);
 			else
-				output_entry.put("etf", getTimeOutputInRightFormat(getLongFrom(order.get("etf"))));
-			output_entry.put("tag", order.get("tag"));
+				output_order.put("etf", getTimeOutputInRightFormat(getLongFrom(order.get("etf"))));
+			output_order.put("tag", order.get("tag"));
 		}
 	}
 	
@@ -390,6 +392,12 @@ public class PurpleOpt {
 			{
 				cluster.add(comp_order);
 				it.remove();
+				
+				// update cluster_first_order for base_order to its own id
+				String base_order_id = (String)base_order.get("id");
+				base_order.put("cluster_first_order", base_order_id);
+				// update cluster_first_order for comp_order to base_order's ID
+				comp_order.put("cluster_first_order", base_order_id);
 			}
 		}
 		return cluster;
@@ -489,7 +497,10 @@ public class PurpleOpt {
 			order_info.put("courier_pos", null);
 			order_info.put("etf", null);
 			// filling tag: late, urgent, normal
-			order_info.put("tag",null);
+			order_info.put("tag", null);
+			// filling cluster_first_order;
+			order.put("cluster_first_order", null);
+			order_info.put("cluster_first_order", null);
 			// filling status if verbose
 			if (verbose_output)
 				order_info.put("status_at_input", order.get("status"));
