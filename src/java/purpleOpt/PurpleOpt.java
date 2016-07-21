@@ -78,11 +78,13 @@ public class PurpleOpt {
 	/* time delay for a currently working but non-connected courier */
 	static long not_connected_delay = 15; // minutes 
 	/* order due in less than 45 minutes is always urgent */
-	static long minsUrgencyThreshold = 45; 
+	static long minsUrgencyThreshold = 45; // minutes
 	/* urgency threshold for classifying dangerous orders and urgent orders in sort incomplete orders */
 	static double urgencyThreshold = 0.8;
 	/* estimated l1 distance threshold for locations equaling in search saved google distance*/
 	static double sameLocationTolerance = 0.0005; // this value roughly equals half a street block
+	/* the max number of orders in one cluster */
+	static long maxNumOrdersPerCluster = 4;
 	
 	/* current time */
 	static long currTime;
@@ -381,7 +383,7 @@ public class PurpleOpt {
 		// remove the base order
 		it.remove();
 		// if the base_order can be clustered, then go through the remaining list for nearby orders while the cluster size is not exceeding the limit
-		while (it.hasNext() && getBooleanFrom(base_order.get("cluster")) && cluster.size() < 3) {
+		while (it.hasNext() && getBooleanFrom(base_order.get("cluster")) && cluster.size() < maxNumOrdersPerCluster) {
 			
 			HashMap<String,Object> comp_order = it.next();  // get the order to compare with the base_order
 			// if the order satisfies conditions, then move it from the list to the cluster
@@ -1152,7 +1154,7 @@ public class PurpleOpt {
 			courier.put("valid", false);
 	}
 
-	// for each order, add a field "cluster" (true or false)
+	// for each order, add a field "cluster" (true for valid orders or false for invalid orders)
 	@SuppressWarnings("unchecked")
 	static void clusterValidation(HashMap<String, Object>couriers, HashMap<String, Object>orders){
 		for(String courier_key: couriers.keySet()){
@@ -1435,14 +1437,14 @@ public class PurpleOpt {
 	}
 
 	// estimate the servicing duration of an order in a cluster
-	static long avgSecondsInClusterByType(HashMap<String,Object> order) {
+	static long avgSecondsInClusterByType_w_relaxation(HashMap<String,Object> order) {
 		long type_seconds = getLongTimeFrom(order,"target_time_end")-getLongTimeFrom(order,"target_time_start");
 		if (type_seconds <= 3600) // 1-hour order
 			return iOrderServingTime(order);
-		else if (type_seconds <= 7200) // up to 3-hour order
-			return iOrderServingTime(order) - 3*60;	// relax 3 minutes
-		else // longer order
-			return iOrderServingTime(order) - 6*60; // relax 6 minutes
+		else if (type_seconds <= 3*3600) // up to 3-hour order
+			return iOrderServingTime(order) - 10*60;	// relax 10 minutes
+		else // longer (5-hour) order
+			return iOrderServingTime(order) - 15*60; // relax 15 minutes
 	}
 
 	// determine where an order can be added to a cluster ("courier" is assigned to this cluster)
@@ -1458,11 +1460,11 @@ public class PurpleOpt {
 			// get an order from cluster
 			HashMap<String, Object> order = it.next();
 			// add its servicing time to cluster_etf
-			cluster_etf += avgSecondsInClusterByType(order);
+			cluster_etf += avgSecondsInClusterByType_w_relaxation(order);
 		}
 
 		// add the servicing time of the candidate order to cluster_etf
-		cluster_etf += avgSecondsInClusterByType(candidate_order);
+		cluster_etf += avgSecondsInClusterByType_w_relaxation(candidate_order);
 		
 		// obtain the deadline of the candidate order
 		long candidate_deadline = getLongTimeFrom(candidate_order,"target_time_end");
