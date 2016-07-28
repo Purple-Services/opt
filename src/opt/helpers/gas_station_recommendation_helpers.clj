@@ -422,7 +422,7 @@
   [src-lng src-lat opt]
   (let [avg-price (avg-gasprice-reg (gas-stations opt))]
     (->>
-     (take 10
+     (take 20
            ;; 50 is good for a single call of this func, but not safe when
            ;; suggest-gas-stations-near-with-score-price-based is called
            (sort-by 
