@@ -419,10 +419,10 @@
    (= (dec block1) (- block2 18000))))
 
 (defn suggest-gas-stations-near-with-score-price-based
-  [src-lng src-lat opt]
+  [src-lng src-lat opt & {:keys [sample-size]}]
   (let [avg-price (avg-gasprice-reg (gas-stations opt))]
     (->>
-     (take 20
+     (take (or sample-size 30)
            ;; 50 is good for a single call of this func, but not safe when
            ;; suggest-gas-stations-near-with-score-price-based is called
            (sort-by 
