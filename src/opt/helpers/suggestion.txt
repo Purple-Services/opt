@@ -1,0 +1,4 @@
+* add comments to functions in the file
+* when there is a destination, a gas station near the destination is preferred
+* do not use Cartesian distance (What if the closest gas station is just on the other side of the free way?)
+* when there are too many gas station candidates before calling Google, we should eliminate the high-price ones to reduce the Google calls. This will be safe elimination. 
