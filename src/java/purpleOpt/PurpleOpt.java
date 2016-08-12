@@ -5,6 +5,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.*;
+import java.util.Map.Entry;
 
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
@@ -256,19 +257,18 @@ public class PurpleOpt {
 	// remove cached distances that are out of date
 	@SuppressWarnings("unchecked")
 	static void googleDistanceCacheClean(long currTime){
-		// traverse all the keys
-		for(Double[] org_dest_key : google_duration_cache.keySet()){
-			// get the record for the org-dest pair
-			HashMap<Long, Long> record = (HashMap<Long, Long>)google_duration_cache.get(org_dest_key);
-			// traverse all the time stamps
-			for(Long timestamp : record.keySet()){
-				// if it is too old, remove it
-				if(currTime - timestamp > google_duration_valid_limit)
-					record.remove(timestamp);
+		// traverse all the entries of the type: <lat-lng, HashMap<timestamp, cached_google_duration>>
+		Iterator<Entry<Double[], Object>> it = google_duration_cache.entrySet().iterator();
+		while(it.hasNext()){
+			Map.Entry<Double[], Object> pair =  it.next();	// get the next entry
+			HashMap<Long, Long> record = (HashMap<Long, Long>) pair.getValue();	// get the HashMap<timestamp, cached_google_duration> of the entry, which is a record
+			Iterator<Long> record_it = record.keySet().iterator();	// get the record's iterator
+			while (record_it.hasNext()){
+				if (currTime - record_it.next() > google_duration_valid_limit)	// compare current time to the timestamp of the record's entry
+					record_it.remove();	// removing from the key removes the entry from the record 
 			}
-			// if the record is empty, remove it from the cache
 			if (record.size() == 0)
-				google_duration_cache.remove(org_dest_key);
+				it.remove();	// remove the record if its HashMap has no entry 
 		}
 	}
 
