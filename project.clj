@@ -5,6 +5,6 @@
                  ;; kludge to pull in json java classes
                  ;; can be removed after we port purpleOpt over to clojure
                  [com.twilio.sdk/twilio-java-sdk "4.2.0"]
-                 [common "1.1.3-SNAPSHOT"]
+                 [common "2.0.0-SNAPSHOT"]
                  [org.clojure/data.json "0.2.6"]]
   :java-source-paths ["src/java"])
