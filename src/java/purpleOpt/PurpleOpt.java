@@ -1832,15 +1832,15 @@ public class PurpleOpt {
 	@SuppressWarnings("unchecked")
 	static boolean bOrderCanBeServedByCourier(HashMap<String,Object> order, HashMap<String,Object> courier) {
 		// at first the courier should be valid
-		if(!getBooleanFrom(courier.get("valid")))
+		if(!getBooleanFrom(courier.get("valid"))) {
 			return false;
-		// meanwhile the order should at the courier's zone
-		else {
+        } else { // meanwhile the order should at the courier's zone
             assertListInteger(courier.get("zones"));
 			List<Integer> courier_zones = (List<Integer>) courier.get("zones");
 			
 			assertListInteger(order.get("zones"));
 			List<Integer> zones = (List<Integer>) order.get("zones");
+
 			for (Integer zone: zones) {
                 if (courier_zones.contains(zone)) {
                     return true;
