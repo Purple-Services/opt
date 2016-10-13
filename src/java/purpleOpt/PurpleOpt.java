@@ -23,7 +23,7 @@ General INPUT (for major functions):
 			"lng" (Double);
 			"id" (String);
 			"courier_id" (String); // "" (empty string) if no courier is assigned
-			"zone" (Integer);
+			"zones" (List<Integers>);
 			"gas_type" (String);
 			"gallons" (Double);
 			"target_time_start" (Integer);
@@ -1779,6 +1779,14 @@ public class PurpleOpt {
 				System.out.println("    target_time_end : " + UnixTimeToSimpleDateFormat(getLongFrom(order.get("target_time_end"))));
 			}
 			System.out.println("    zone_id: " + getIntegerFrom(order.get("zone_id")));
+            //print zones
+			System.out.print("    zones: " );
+			assertListInteger(order.get("zones"));
+			List<Integer> orderZones = (List<Integer>) order.get("zones");
+			for(Integer orderZone: orderZones) {
+				System.out.print(orderZone + " ");
+			}
+			System.out.println();
 
 			// print the status time history
 			if (json_input) {
@@ -1827,14 +1835,18 @@ public class PurpleOpt {
 		if(!getBooleanFrom(courier.get("valid")))
 			return false;
 		// meanwhile the order should at the courier's zone
-		else{
-			Integer order_zone = getIntegerFrom(order.get("zone"));
-			assertListInteger(courier.get("zones"));
+		else {
+            assertListInteger(courier.get("zones"));
 			List<Integer> courier_zones = (List<Integer>) courier.get("zones");
-			if (courier_zones.contains(order_zone))
-				return true;
-			else
-				return false;
+			
+			assertListInteger(order.get("zones"));
+			List<Integer> zones = (List<Integer>) order.get("zones");
+			for (Integer zone: zones) {
+                if (courier_zones.contains(zone)) {
+                    return true;
+                }
+			}
+            return false;
 		}
 	}
 
