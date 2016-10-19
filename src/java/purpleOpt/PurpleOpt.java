@@ -5,6 +5,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.*;
+import java.util.Map.Entry;
 
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
@@ -22,7 +23,7 @@ General INPUT (for major functions):
 			"lng" (Double);
 			"id" (String);
 			"courier_id" (String); // "" (empty string) if no courier is assigned
-			"zone" (Integer);
+			"zones" (List<Integers>);
 			"gas_type" (String);
 			"gallons" (Double);
 			"target_time_start" (Integer);
@@ -40,7 +41,12 @@ General INPUT (for major functions):
 	"human_time_format": (optional) true / false (default);
 	"current_time": (optional) SimpleDateFormat (if human_time_format is true) or UnixTime (if human_time_format is false)
 	"verbose_output": (optional) true / false (default); if true, output will add the following fields:
-	                   ->[order ID]->status, ->sorted_order_list, ->luster_list, ->unprocessed_list
+	                   ->[order ID]->status, ->sorted_order_list, ->cluster_list, ->unprocessed_list, ->google_api_calls, ->google_duration_cache
+	"simulation_mode": (optional) true / false (default); if true, google API calls will use departure_time=currTime+(52 weeks) and google_duration_cache will not be cleaned
+	"google_api_calls": (optional) Integer; if not specified, it will be reset to 0
+	"google_duration_cache": (optional) HashMap:
+		[org_lat,org_lng,dest_lat,dest_lng] (Double[]):
+			[timestamp] (Long) : [duration_in_traffic] (Long);
  */
 
 /* int (Integer) vs long (Long)
@@ -52,8 +58,6 @@ public class PurpleOpt {
 
 	/*--- global parameters --*/
 
-	/* current time */
-	static long currTime;
 	/* global printing switch */
 	static boolean bPrint = false; // CAUTION, use false for release
 	/* Google API key */
@@ -75,20 +79,30 @@ public class PurpleOpt {
 	/* time delay for a currently working but non-connected courier */
 	static long not_connected_delay = 15; // minutes 
 	/* order due in less than 45 minutes is always urgent */
-	static long minsUrgencyThreshold = 45; 
+	static long minsUrgencyThreshold = 45; // minutes
 	/* urgency threshold for classifying dangerous orders and urgent orders in sort incomplete orders */
 	static double urgencyThreshold = 0.8;
 	/* estimated l1 distance threshold for locations equaling in search saved google distance*/
 	static double sameLocationTolerance = 0.0005; // this value roughly equals half a street block
+	/* the max number of orders in one cluster */
+	static long maxNumOrdersPerCluster = 4;
 	
-	/* verbose output switch */
-	static boolean verbose_output = false;
+	/* current time */
+	static long currTime;
 	/* human time format switch (only for input and output) */
 	static boolean human_time_format = false; // if true, input and output will use human readable time format
-	/* save Google distance according to origin lat-lng and dest lat-lng */
-	// [org+dest] (String):
-	//    "timestamp": timestamp (Integer or String);
-	//    "duration_in_traffic": duration_in_traffic (Long);
+	/* working time, which is a specific future time for simulation and current time for realistic use */
+	static boolean simulation_mode = false;
+	/* verbose output switch */
+	static boolean verbose_output = false;
+	/* number of google API calls */
+	static int google_api_calls = 0;
+	
+	/* save Google distance according to origin lat-lng and dest lat-lng
+	 * HashMap:
+		[org_lat,org_lng,dest_lat,dest_lng] (Double[]):
+			[timestamp] (Long) : [duration_in_traffic] (Long);
+	*/
 	static HashMap<Double[], Object> google_duration_cache = new HashMap<Double[], Object>();
 	/* duration of validation for google distance saved*/
 	static long google_duration_valid_limit = 15 * 60;
@@ -102,11 +116,14 @@ public class PurpleOpt {
           "new_assignment": [(boolean) true if it is a new suggested assignment; false if it is an existing assignment],
           "courier_pos": [(Integer) the position of the order in the courier's queue (1 based); null if cannot be determined]
           "etf": [(Integer) estimated finish time; null if cannot be computed],
-          "status": (if verbose) [(String) the same status given in the input]
+          "cluster_first_order": [(String) null if not in a cluster; otherwise, the ID of the first order in the cluster, possibly this order itself]
+          "status_at_input": (if verbose) [(String) the same status given in the input]
           }
         sorted_order_list: (if verbose) the list of orders internally sorted, given in order_id's
         cluster_list: (if verbose) the list of order clusters, given in order_id's
         unprocessed_list: (if verbose) the list of unprocessed orders, given in order_id's
+        google_api_calls: (if verbose) the number of google API calls made
+        google_duration_cache: (if verbose) the google duration cache
     NOTE: if there is no unassigned order in the input, an empty LinkedHashmap (instead of null) will be returned
 	}
 	 */
@@ -117,23 +134,58 @@ public class PurpleOpt {
 		Object value = input.get("human_time_format");
 		if (value == null)
 			human_time_format = false;
-		else
+		else if (value instanceof Boolean)
 			human_time_format = (boolean) value;
+		else
+			throw new IllegalArgumentException();
+		
 		// get current time from either the input or, if missing from the input, the system
 		currTime = getCurrUnixTime(input);
-
+		
+		// get "simulation_mode" from input
+		value = input.get("simulation_mode");
+		if (value == null)
+			simulation_mode = false;
+		else if (value instanceof Boolean)
+			simulation_mode = (boolean) value;
+		else
+			throw new IllegalArgumentException();
+		
+		// get "verbose_output" from input
 		value = input.get("verbose_output");
 		if (value == null)
 			verbose_output = false;
-		else
+		else if (value instanceof Boolean)
 			verbose_output = (boolean) value;
+		else
+			throw new IllegalArgumentException();		
 		
+		// get initial "google_api_calls" from input
+		value = input.get("google_api_calls");
+		if (value == null)
+			google_api_calls = 0;
+		else if (value instanceof Long || value instanceof Integer)
+			google_api_calls = (int) value;
+		else
+			throw new IllegalArgumentException();	
+		
+		// get initial "google_duration_cache" from input; if null, do nothing
+		value = input.get("google_duration_cache");
+		if (value != null){
+			if (value instanceof HashMap)
+				google_duration_cache = (HashMap<Double[], Object>) value;
+			else
+				throw new IllegalArgumentException();
+		}
 		
 		// initialize output HashMap
 		LinkedHashMap<String,Object> outHashMap = new LinkedHashMap<>();
 
-		// remove saved distances which are out of date
-		googleDistanceCacheClean(currTime);
+		if(!simulation_mode){
+			// remove cached distances that are out of date
+			// in simulation mode, all distances are cached for future re-simulation
+			googleDistanceCacheClean(currTime);
+		}
 		
 		// obtain orders from the input
 		HashMap<String, Object> orders = (HashMap<String, Object>) input.get("orders");
@@ -180,7 +232,7 @@ public class PurpleOpt {
 		// initialize output cluster_list
 		List<List<String>> cluster_list = new ArrayList<>();
 		
-		// cluster and assign orders to couriers
+		// cluster orders and assign orders/clusters to couriers
 		assignOrders(cluster_list, orders, sorted_orders, couriers, currTime);
 		
 		// save cluster_list if verbose
@@ -190,42 +242,51 @@ public class PurpleOpt {
 		// extract information from orders to outHashMap
 		outputUpdate(orders, outHashMap);
 		
-		// collect unprocessed orders
-		if (verbose_output)
+		if (verbose_output){
+			// collect unprocessed orders
 			outHashMap.put("unprocessed_list", sorted_orders);
-		
-		// collect google distance
-		if (verbose_output)
+			// number of google API calls
+			outHashMap.put("google_api_calls", google_api_calls);
+			// collect google distance
 			outHashMap.put("google_duration_cache", google_duration_cache);
+		}
 		
 		return outHashMap;
 	}
 	
-  @SuppressWarnings("unchecked")
+	// remove cached distances that are out of date
+	@SuppressWarnings("unchecked")
 	static void googleDistanceCacheClean(long currTime){
-		for(Double[] org_dest_key : google_duration_cache.keySet()){
-			HashMap<String, Object> record = (HashMap<String, Object>)google_duration_cache.get(org_dest_key);
-			if(Math.abs(currTime - getLongTimeFrom(record,"timestamp")) > google_duration_valid_limit){
-				// the distance saved is out of date, remove it
-				google_duration_cache.remove(org_dest_key);
+		// traverse all the entries of the type: <lat-lng, HashMap<timestamp, cached_google_duration>>
+		Iterator<Entry<Double[], Object>> it = google_duration_cache.entrySet().iterator();
+		while(it.hasNext()){
+			Map.Entry<Double[], Object> pair =  it.next();	// get the next entry
+			HashMap<Long, Long> record = (HashMap<Long, Long>) pair.getValue();	// get the HashMap<timestamp, cached_google_duration> of the entry, which is a record
+			Iterator<Long> record_it = record.keySet().iterator();	// get the record's iterator
+			while (record_it.hasNext()){
+				if (currTime - record_it.next() > google_duration_valid_limit)	// compare current time to the timestamp of the record's entry
+					record_it.remove();	// removing from the key removes the entry from the record 
 			}
+			if (record.size() == 0)
+				it.remove();	// remove the record if its HashMap has no entry 
 		}
 	}
-	
+
   	// Based on the computation, update output LinkedHashMap
 	@SuppressWarnings("unchecked")
 	static void outputUpdate(HashMap<String, Object> orders, LinkedHashMap<String, Object> outHashMap){
 		for(String order_key: orders.keySet()){
-			LinkedHashMap<String, Object> output_entry = (LinkedHashMap<String, Object>)outHashMap.get(order_key);
+			LinkedHashMap<String, Object> output_order = (LinkedHashMap<String, Object>)outHashMap.get(order_key);
 			HashMap<String, Object> order = (HashMap<String, Object>)orders.get(order_key);
-			output_entry.put("new_assignment", order.get("new_assignment"));
-			output_entry.put("courier_id", order.get("courier_id"));
-			output_entry.put("courier_pos", order.get("courier_pos"));
+			output_order.put("new_assignment", order.get("new_assignment"));
+			output_order.put("courier_id", order.get("courier_id"));
+			output_order.put("courier_pos", order.get("courier_pos"));
+			output_order.put("cluster_first_order", order.get("cluster_first_order"));
 			if (order.get("etf") == null)
-				output_entry.put("etf", null);
+				output_order.put("etf", null);
 			else
-				output_entry.put("etf", getTimeOutputInRightFormat((Long) order.get("etf")));
-			output_entry.put("tag", order.get("tag"));
+				output_order.put("etf", getTimeOutputInRightFormat(getLongFrom(order.get("etf"))));
+			output_order.put("tag", order.get("tag"));
 		}
 	}
 	
@@ -256,7 +317,7 @@ public class PurpleOpt {
 				courier = (HashMap<String, Object>) couriers.get(courier_id);
 			
 			// ensure that the base order has been assigned to a "valid" courier; if not, do nothing
-			if((courier!=null) && ((boolean)courier.get("valid"))){
+			if((courier!=null) && getBooleanFrom(courier.get("valid"))){
 				// do clustering, which will remove the base or other orders from sorted_orders
 				List<HashMap<String, Object>> cluster = doClustering(base_order, it, couriers, currTime);
 				// record the cluster for output
@@ -287,10 +348,10 @@ public class PurpleOpt {
 			// get the courier
 			HashMap<String,Object> courier = (HashMap<String,Object>) couriers.get(courier_key);
 			// consider a courier only if s/he can serve the order
-			if (((boolean)courier.get("valid")) && bOrderCanBeServedByCourier(base_order,courier)) { 
+			if (getBooleanFrom(courier.get("valid")) && bOrderCanBeServedByCourier(base_order,courier)) { 
 				// compute score
-				long start_time = ((Long)courier.get("finish_time")); // the time when the courier will finish all the assigned orders;
-				long travel_time = timeDistantOrder(base_order, (Double)courier.get("finish_lat"), (Double)courier.get("finish_lng"));
+				long start_time = getLongFrom(courier.get("finish_time")); // the time when the courier will finish all the assigned orders;
+				long travel_time = timeDistantOrder(base_order, getDoubleFrom(courier.get("finish_lat")), getDoubleFrom(courier.get("finish_lng")));
 				long finish_time = start_time + travel_time; // the total time for the new order
 				long score = start_time + Math.round(travel_time_factor * (double)travel_time)
 				+ computeCrossZonePenalty(base_order,courier,orders,couriers); // score also include cross-zone penalty
@@ -322,7 +383,7 @@ public class PurpleOpt {
 		// remove the base order
 		it.remove();
 		// if the base_order can be clustered, then go through the remaining list for nearby orders while the cluster size is not exceeding the limit
-		while (it.hasNext() && (boolean)base_order.get("cluster") && cluster.size() < 3) {
+		while (it.hasNext() && getBooleanFrom(base_order.get("cluster")) && cluster.size() < maxNumOrdersPerCluster) {
 			
 			HashMap<String,Object> comp_order = it.next();  // get the order to compare with the base_order
 			// if the order satisfies conditions, then move it from the list to the cluster
@@ -333,6 +394,12 @@ public class PurpleOpt {
 			{
 				cluster.add(comp_order);
 				it.remove();
+				
+				// update cluster_first_order for base_order to its own id
+				String base_order_id = (String)base_order.get("id");
+				base_order.put("cluster_first_order", base_order_id);
+				// update cluster_first_order for comp_order to base_order's ID
+				comp_order.put("cluster_first_order", base_order_id);
 			}
 		}
 		return cluster;
@@ -344,9 +411,9 @@ public class PurpleOpt {
 		// obtain courier's fields
 		String courier_id = (String) courier.get("id");
 		List<String> courier_assigned_orders = (List<String>) courier.get("assigned_orders");
-		long start_time = (Long)courier.get("finish_time");
+		long start_time = getLongFrom(courier.get("finish_time"));
 		// compute new time
-		long finish_time = start_time + timeDistantOrder(order, (Double)courier.get("finish_lat"), (Double)courier.get("finish_lng"));
+		long finish_time = start_time + timeDistantOrder(order, getDoubleFrom(courier.get("finish_lat")), getDoubleFrom(courier.get("finish_lng")));
 		// obtain order's fields
 		String order_id = (String) order.get("id");
 
@@ -355,8 +422,8 @@ public class PurpleOpt {
 			// update the courier
 			courier_assigned_orders.add(order_id);
 			courier.put("finish_time", finish_time);
-			courier.put("finish_lat", (Double)order.get("lat"));
-			courier.put("finish_lng", (Double)order.get("lng"));
+			courier.put("finish_lat", getDoubleFrom(order.get("lat")));
+			courier.put("finish_lng", getDoubleFrom(order.get("lng")));
 			// update the order
 			order.put("new_assignment", true);
 			order.put("courier_id", courier_id);
@@ -379,7 +446,7 @@ public class PurpleOpt {
 		// get the base order
 		order = it.next();
 		// initialize etf to that of the base order
-		long etf = (Long) order.get("etf");
+		long etf = getLongFrom(order.get("etf"));
 		// for each non-base order
 		while(it.hasNext()) {
 			// get an order from the cluster
@@ -399,8 +466,8 @@ public class PurpleOpt {
 
 			// update the best courier's finish_time/lat/lng
 			courier.put("finish_time", etf);
-			courier.put("finish_lat", (Double)order.get("lat"));
-			courier.put("finish_lng", (Double)order.get("lng"));
+			courier.put("finish_lat", getDoubleFrom(order.get("lat")));
+			courier.put("finish_lng", getDoubleFrom(order.get("lng")));
 		}
 	}
 	
@@ -432,10 +499,13 @@ public class PurpleOpt {
 			order_info.put("courier_pos", null);
 			order_info.put("etf", null);
 			// filling tag: late, urgent, normal
-			order_info.put("tag",null);
+			order_info.put("tag", null);
+			// filling cluster_first_order;
+			order.put("cluster_first_order", null);
+			order_info.put("cluster_first_order", null);
 			// filling status if verbose
 			if (verbose_output)
-				order_info.put("status", order.get("status"));
+				order_info.put("status_at_input", order.get("status"));
 			// add order_info to outHashMap
 			outHashMap.put(order_key, order_info);
 		}
@@ -489,6 +559,15 @@ public class PurpleOpt {
 	@SuppressWarnings("unchecked")
 	public static HashMap<String, Object> computeDistance(HashMap<String,Object> input) {
 
+		// get initial "google_api_calls" from input
+		Object value = input.get("google_api_calls");
+		if (value == null)
+			google_api_calls = 0;
+		else if (value instanceof Long || value instanceof Integer)
+			google_api_calls = (int) value;
+		else
+			throw new IllegalArgumentException();	
+
 		// get current time in the Unix time format
 		// long currTime = System.currentTimeMillis() / 1000L; // not used any more
 
@@ -519,8 +598,8 @@ public class PurpleOpt {
 			// check if the courier is valid
 			if (bCourierValidLocation(courier)) {
 				// get the courier lat and lng
-				Double courier_lat = (Double) courier.get("lat");
-				Double courier_lng = (Double) courier.get("lng");
+				Double courier_lat = getDoubleFrom(courier.get("lat"));
+				Double courier_lng = getDoubleFrom(courier.get("lng"));
 				// add this courier to listOrigins, if the courier is not already there
 				if (!listOriginKeys.contains(courier_key)) {
 					// add the lat-lng of this courier to listOrigins
@@ -552,8 +631,8 @@ public class PurpleOpt {
 				outOrder.put("etas", outETAs);
 
 				// get the order lat and lng
-				Double order_lat = (Double) order.get("lat");
-				Double order_lng = (Double) order.get("lng");
+				Double order_lat = getDoubleFrom(order.get("lat"));
+				Double order_lng = getDoubleFrom(order.get("lng"));
 
 				// add this order to listDest, if not already there, for googleDistanceMatrix
 				if (!listDestKeys.contains(order_key)) {
@@ -623,9 +702,7 @@ public class PurpleOpt {
 			return (outHashmap);
 	}
 	
-	/* return the all-pair google distance for a list of origins and destinations 
-	 * TODO: add an option to feed user specified time of travel
-	 */
+	/* return the all-pair google distance for a list of origins and destinations */
 	public static List<List<Long>> googleDistanceMatrixGetByHttp(List<String> org_latlngs, List<String> dest_latlngs) {
 		int nOrgs = org_latlngs.size();
 		int nDests = dest_latlngs.size();
@@ -671,6 +748,8 @@ public class PurpleOpt {
 			url = new URL(reqURL);
 			conn = (HttpURLConnection) url.openConnection();
 			conn.setRequestMethod("GET");
+
+			google_api_calls += nOrgs*nDests;
 
 			// retrieve the results
 			BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
@@ -731,7 +810,7 @@ public class PurpleOpt {
 						element = (JSONObject) elements.get(j);
 						resp_status = (String)element.get("status");
 						if (resp_status.equals("OK")) {
-							resp_seconds = (Long)((JSONObject)element.get("duration_in_traffic")).get("value");
+							resp_seconds = getLongFrom(((JSONObject)element.get("duration_in_traffic")).get("value"));
 							rowSeconds.add(resp_seconds);
 						}
 						else {
@@ -818,10 +897,11 @@ public class PurpleOpt {
 			currTime = SimpleDateFormatToUnixTime((String)value);
 		else
 			// get the specified "current time" in the Unix time format
-			currTime = (Long) value;
+			currTime = getLongFrom(value);
 		
 		return currTime;
 	}
+	
 
 	/* For each courier, set their status (lat,lng,time) when they finish their already-assigned orders)
 	 * If they have no assigned order, use their current status.
@@ -859,30 +939,27 @@ public class PurpleOpt {
 	static HashMap<String,Object> computeFinishTimeLatLng(HashMap<String, Object> courier, HashMap<String, Object> orders, long startTime) {
 
 		// exception handling for a courier without the field "valid" or is invalid, just in case
-		Boolean bValid = (Boolean) courier.get("valid");
+		Boolean bValid = getBooleanFrom(courier.get("valid"));
 		// initialize assigned orders for the courier
 		List<String> assigned_orders_keys = new ArrayList<String>();
 		// if the courier is invalid but its first order is enroute or servicing, we should still compute this order's etf
 		if (bValid == null || (!bValid)) {
 			// get the courier's total assigned orders
 			List<String> temp_list = (List<String>)courier.get("assigned_orders");
+			// obtain the first order of this courier for computing its etf
 			if (!temp_list.isEmpty()) {
 				HashMap<String,Object> firstOrder = (HashMap<String, Object>) orders.get(temp_list.get(0));
 				if ((firstOrder.get("status")).equals("enroute") || (firstOrder.get("status")).equals("servicing"))
 					assigned_orders_keys.add(temp_list.get(0));
 			}
-			// obtain get the first order of this courier for computing its etf
-			if(!((List<String>)courier.get("assigned_orders")).isEmpty())
-				assigned_orders_keys.add(((List<String>)courier.get("assigned_orders")).get(0));
-			
 		}
 		else
 			// get the courier's total assigned orders
 			assigned_orders_keys = (List<String>)courier.get("assigned_orders");
 		
 		// initialize lat lng to the courier's current lat lng
-		Double finish_lat = (Double)courier.get("lat");
-		Double finish_lng = (Double)courier.get("lng");
+		Double finish_lat = getDoubleFrom(courier.get("lat"));
+		Double finish_lng = getDoubleFrom(courier.get("lng"));
 		// initialize finish_time to the specified startTime
 		Long finish_time = startTime;
 
@@ -892,8 +969,8 @@ public class PurpleOpt {
 			HashMap<String, Object> order = (HashMap<String, Object>) orders.get(assigned_orders_keys.get(0));
 
 			// initialize the assigned order lat-lng as the first (working) order lat-lng
-			Double order_lat = (Double) order.get("lat");
-			Double order_lng = (Double) order.get("lng");
+			Double order_lat = getDoubleFrom(order.get("lat"));
+			Double order_lng = getDoubleFrom(order.get("lng"));
 			
 			if (bCourierAtOrderSite(order,courier))
 				// TODO: when the courier is on-site, we should use the event-log time to determine the remaining servicing time
@@ -919,8 +996,8 @@ public class PurpleOpt {
 				Double prev_order_lat = order_lat;
 				Double prev_order_lng = order_lng;
 				// get the assigned order's lat and lng
-				order_lat = (Double) order.get("lat");
-				order_lng = (Double) order.get("lng");
+				order_lat = getDoubleFrom(order.get("lat"));
+				order_lng = getDoubleFrom(order.get("lng"));
 
 				// check if two orders are nearby
 				if (bNearbyOrderLatLng(prev_order_lat,prev_order_lng,order_lat,order_lng)) {
@@ -978,17 +1055,17 @@ public class PurpleOpt {
 	
 	/* decide whether two orders are considered nearby */
 	static boolean bNearbyOrder(HashMap<String,Object> order1, HashMap<String,Object> order2) {
-		return bNearbyOrderLatLng((Double) order1.get("lat"), (Double) order1.get("lng"),
-				(Double) order2.get("lat"), (Double) order2.get("lng"));
+		return bNearbyOrderLatLng(getDoubleFrom(order1.get("lat")), getDoubleFrom(order1.get("lng")),
+				getDoubleFrom(order2.get("lat")), getDoubleFrom(order2.get("lng")));
 	}
 
 	/* decide whether a courier has a valid location so it can take orders */
 	public static boolean bCourierValidLocation(HashMap<String, Object> courier){
 		// get the courier connection status
-		Boolean connected = (Boolean) courier.get("connected");
+		Boolean connected = getBooleanFrom(courier.get("connected"));
 		// get the courier lat and lng
-		Double courier_lat = (Double) courier.get("lat");
-		Double courier_lng = (Double) courier.get("lng");
+		Double courier_lat = getDoubleFrom(courier.get("lat"));
+		Double courier_lng = getDoubleFrom(courier.get("lng"));
 		if (connected.booleanValue() && courier_lat != 0 && courier_lng != 0)
 			return true;
 		else 
@@ -1077,13 +1154,13 @@ public class PurpleOpt {
 			courier.put("valid", false);
 	}
 
-	// for each order, add a field "cluster" (true or false)
+	// for each order, add a field "cluster" (true for valid orders or false for invalid orders)
 	@SuppressWarnings("unchecked")
 	static void clusterValidation(HashMap<String, Object>couriers, HashMap<String, Object>orders){
 		for(String courier_key: couriers.keySet()){
 			HashMap<String, Object> courier = (HashMap<String, Object>)couriers.get(courier_key);
 			// if the courier is invalid, then all of his assigned orders are invalid
-			if(!(boolean)courier.get("valid")){
+			if(!getBooleanFrom(courier.get("valid"))){
 				for(String order_id: (List<String>)courier.get("assigned_orders")){
 					HashMap<String, Object> order = (HashMap<String, Object>) orders.get(order_id);
 					order.put("cluster", false);
@@ -1185,13 +1262,7 @@ public class PurpleOpt {
 		double gallons = Double.MAX_VALUE;
 		
 		// obtain gallon numbers
-		Object val = order.get("gallons");
-		if (val instanceof Double)
-			gallons = (Double) val;
-		else if (val instanceof Integer)
-			gallons = ((Integer) val).doubleValue();
-		else
-			throw new IllegalArgumentException();
+		gallons = getDoubleFrom(order.get("gallons"));
 				
 		if (nearlyEqual(gallons, 7.5, epsilon)) // 7.5 gallons
 			return 60 * mins7_5GallonOrder;
@@ -1217,34 +1288,56 @@ public class PurpleOpt {
 			if(googleDistanceZero(origin_lat, origin_lng, saved_org_lat, saved_org_lng, sameLocationTolerance) &&
 			   googleDistanceZero(dest_lat,   dest_lng,   saved_des_lat, saved_des_lng, sameLocationTolerance)   ){
 				// get saved record in google_duration_cache
-				HashMap<String, Object> record = (HashMap<String, Object>) google_duration_cache.get(org_dest_key);
-				// get saved timestamp
-				if(Math.abs(currTime - getLongTimeFrom(record,"timestamp")) <= google_duration_valid_limit)
-						return (Long)record.get("duration_in_traffic");
+				HashMap<Long,Long> record = (HashMap<Long,Long>) google_duration_cache.get(org_dest_key);
+				// look through all the time stamps
+				for(Long timestamp : record.keySet()){
+					// return the cache if its time stamp is with currTime +/- google_duration_valid_limit 
+					if(Math.abs(currTime - timestamp) <= google_duration_valid_limit)
+						return record.get(timestamp);
+				}
 				// do not remove record here to avoid concurrent modification
 			}
 		}
-		// if not found in saved records, return 0
+		// if not found in cache, return -1 (Note: returning 0 is not safe because 0 is a valid duration)
 		return -1;
+	}
+	
+	// given org_lat/lng and dest_lat/lng, look up google_duration_cache to find a roughly matching record; if not found, return null
+	@SuppressWarnings("unchecked")
+	static HashMap<Long,Long> googleDistanceLocationLookup(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
+		// traverse all pairs of org_lat/lng and dest_lat/lng
+		for(Double[] org_dest_key : google_duration_cache.keySet()){
+			Double saved_org_lat = org_dest_key[0];
+			Double saved_org_lng = org_dest_key[1];
+			Double saved_des_lat = org_dest_key[2];
+			Double saved_des_lng = org_dest_key[3];
+		
+			// target origin and dest are close to a pair of saved records
+			if(googleDistanceZero(origin_lat, origin_lng, saved_org_lat, saved_org_lng, sameLocationTolerance) &&
+			   googleDistanceZero(dest_lat,   dest_lng,   saved_des_lat, saved_des_lng, sameLocationTolerance)){
+				return (HashMap<Long,Long>)google_duration_cache.get(org_dest_key);
+			}
+		}
+		// not found
+		return null;
 	}
 
 	// after calling google API, save the distance
-	static long googleDistanceAddToCache(long seconds, Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
-		// create key
-		Double[] org_dest_key = {origin_lat,origin_lng,dest_lat,dest_lng};
-		// create record structure for distance_key
-		HashMap<String, Object> record = new HashMap<String, Object>(); 
-		// write record
-		record.put("timestamp", getTimeOutputInRightFormat(currTime, true));	// true means includes date
-		record.put("duration_in_traffic", seconds);
-		// write in global saving vessel
-		google_duration_cache.put(org_dest_key, record);
-		return 0;
+	static void googleDistanceAddToCache(long seconds, Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng){
+		// check if the (rough) location already exists
+		HashMap<Long,Long> record = googleDistanceLocationLookup(origin_lat, origin_lng, dest_lat, dest_lng);
+		// if not, create a new record and add it to google_duration_cache
+		if (record == null) {
+			Double[] org_dest_key = {origin_lat,origin_lng,dest_lat,dest_lng};
+			record = new HashMap<Long, Long>();
+			google_duration_cache.put(org_dest_key, record);
+		}
+		
+		// add the entry timestamp:duration to the record
+		record.put(currTime, seconds);
 	}
-	
-	/* return the google distance for a courier to an order 
-	 * TODO: add an option for a user specified time
-	 */
+
+	/* return the google distance for a courier to an order */
 	public static long googleDistanceGetByHttp(Double origin_lat, Double origin_lng, Double dest_lat, Double dest_lng) {
 
 		// check if the origin and dest are the same place
@@ -1267,7 +1360,12 @@ public class PurpleOpt {
 
 			// generate request URL 
 			String reqURL = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=" + org + "&destinations=" + dest;
-			reqURL += "&departure_time=now";
+			// under simulation_mode, use currTime+52 weeks because currTime is not the real current time
+			if(simulation_mode)
+				reqURL += "&departure_time=" + (currTime + 31449600);
+			else
+				reqURL += "&departure_time=now";
+
 			reqURL += "&key=" + google_api_key;
 
 			// debug display
@@ -1284,6 +1382,8 @@ public class PurpleOpt {
 				conn = (HttpURLConnection) url.openConnection();
 				conn.setRequestMethod("GET");
 				conn.setConnectTimeout(5000);
+				
+				google_api_calls++;
 
 				BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
 				String line;
@@ -1300,7 +1400,7 @@ public class PurpleOpt {
 				String resp_status = (String)row_0_element_0.get("status");
 				if (resp_status.equals("OK")) {
 					// parse JSON for the seconds
-					Long resp_seconds = (Long)((JSONObject)row_0_element_0.get("duration_in_traffic")).get("value");
+					Long resp_seconds = getLongFrom(((JSONObject)row_0_element_0.get("duration_in_traffic")).get("value"));
 					seconds = resp_seconds.intValue();
 					googleDistanceAddToCache(seconds, origin_lat, origin_lng, dest_lat, dest_lng);
 				}
@@ -1331,20 +1431,20 @@ public class PurpleOpt {
 
 	/* return the total time spent on an order that is away from the previous lat-lng location */
 	static long timeDistantOrder(HashMap<String,Object> order, Double prev_lat, Double prev_lng) {
-		return googleDistanceGetByHttp(prev_lat, prev_lng, (Double)order.get("lat"), (Double)order.get("lng")) // travel time
+		return googleDistanceGetByHttp(prev_lat, prev_lng, getDoubleFrom(order.get("lat")), getDoubleFrom(order.get("lng"))) // travel time
 				+ iOrderServingTime(order); // servicing time
 
 	}
 
 	// estimate the servicing duration of an order in a cluster
-	static long avgSecondsInClusterByType(HashMap<String,Object> order) {
+	static long avgSecondsInClusterByType_w_relaxation(HashMap<String,Object> order) {
 		long type_seconds = getLongTimeFrom(order,"target_time_end")-getLongTimeFrom(order,"target_time_start");
 		if (type_seconds <= 3600) // 1-hour order
 			return iOrderServingTime(order);
-		else if (type_seconds <= 7200) // up to 3-hour order
-			return iOrderServingTime(order) - 3*60;	// relax 3 minutes
-		else // longer order
-			return iOrderServingTime(order) - 6*60; // relax 6 minutes
+		else if (type_seconds <= 3*3600) // up to 3-hour order
+			return iOrderServingTime(order) - 10*60;	// relax 10 minutes
+		else // longer (5-hour) order
+			return iOrderServingTime(order) - 15*60; // relax 15 minutes
 	}
 
 	// determine where an order can be added to a cluster ("courier" is assigned to this cluster)
@@ -1354,17 +1454,17 @@ public class PurpleOpt {
 		// get base order
 		HashMap<String, Object> base_order = it.next();
 		// initialize the cluster_etf by that of the base order
-		Long cluster_etf = (Long)base_order.get("etf");
+		Long cluster_etf = getLongFrom(base_order.get("etf"));
 		// compute total servicing duration and last deadline for the orders in the cluster
 		while (it.hasNext()) {
 			// get an order from cluster
 			HashMap<String, Object> order = it.next();
 			// add its servicing time to cluster_etf
-			cluster_etf += avgSecondsInClusterByType(order);
+			cluster_etf += avgSecondsInClusterByType_w_relaxation(order);
 		}
 
 		// add the servicing time of the candidate order to cluster_etf
-		cluster_etf += avgSecondsInClusterByType(candidate_order);
+		cluster_etf += avgSecondsInClusterByType_w_relaxation(candidate_order);
 		
 		// obtain the deadline of the candidate order
 		long candidate_deadline = getLongTimeFrom(candidate_order,"target_time_end");
@@ -1430,7 +1530,7 @@ public class PurpleOpt {
 					else if(o1_tag.equals("normal") && o2_tag.equals("urgent"))
 						// give priority to "urgent" over "normal"
 						return 1;
-					else if(o1_tag.equals(o2_tag) && (double)o1.get("score") > (double)o2.get("score"))
+					else if(o1_tag.equals(o2_tag) && getDoubleFrom(o1.get("score")) > getDoubleFrom(o2.get("score")))
 						// when they have the same tag, give priority to lower score
 						return 1;
 					else 
@@ -1438,7 +1538,7 @@ public class PurpleOpt {
 				}
 				else if (o1_status.equals(o2_status) && !o1_status.equals("unassigned") && o1.containsKey("etf") && o2.containsKey("etf")) {
 					// both orders have the same status, either "assigned", "accepted", "enroute", or "servicing", and both have "etf"
-					if((Long)o1.get("etf") > (Long)o2.get("etf"))
+					if(getLongFrom(o1.get("etf")) > getLongFrom(o2.get("etf")))
 						// give priority to earlier etf
 						return 1;
 					else 
@@ -1456,8 +1556,8 @@ public class PurpleOpt {
 	@SuppressWarnings("unchecked")
 	static void tagUnassignedOrder(HashMap<String, Object> order, HashMap<String, Object> couriers, Long currTime){
 		// get order's location
-		Double order_lat = (Double)order.get("lat");
-		Double order_lng = (Double)order.get("lng");
+		Double order_lat = getDoubleFrom(order.get("lat"));
+		Double order_lng = getDoubleFrom(order.get("lng"));
 		// initialize min score/ratio
 		double min_score = Double.MAX_VALUE; // for normal orders
 		double min_urgency_ratio = Double.MAX_VALUE;  // for late/urgent orders
@@ -1471,11 +1571,11 @@ public class PurpleOpt {
 			// do zone-check and calculate the distance from courier's finish position to order 
 			if(bOrderCanBeServedByCourier(order, courier)){
 				// get courier's finish position
-				Double courier_lat = (Double)courier.get("finish_lat");
-				Double courier_lng = (Double)courier.get("finish_lng");
+				Double courier_lat = getDoubleFrom(courier.get("finish_lat"));
+				Double courier_lng = getDoubleFrom(courier.get("finish_lng"));
 				long travel_duration = googleDistanceGetByHttp(courier_lat, courier_lng, order_lat, order_lng);
 				// get courier's finish time
-				long finish_time = (Long)courier.get("finish_time");
+				long finish_time = getLongFrom(courier.get("finish_time"));
 				// if this courier's finish time is earlier than the order's deadline 
 				if(finish_time < order_deadline){
 					double urgency_ratio = ((double)(travel_duration + service_duration)) / ((double)(order_deadline - finish_time));
@@ -1510,12 +1610,12 @@ public class PurpleOpt {
 
 		// compute scores separately for late, urgent, normal orders
 		if(tag.equals("late"))	// "late" order
-			score = (double)getLongTimeFrom(order,"target_time_end");
+			score = getLongTimeFrom(order,"target_time_end").doubleValue();
 		else if(tag.equals("urgent")){ 		// "urgent" order
-			score = 1/((double)order.get("min_urgency_ratio")); // lower ratio go earlier
+			score = 1/(getDoubleFrom(order.get("min_urgency_ratio"))); // lower ratio go earlier
 		}
 		else if(tag.equals("normal")){	// "normal" order
-			score = (double)order.get("min_score");
+			score = getDoubleFrom(order.get("min_score"));
 		}
 
 		order.put("score", score);
@@ -1584,8 +1684,8 @@ public class PurpleOpt {
 	@SuppressWarnings("unchecked")
 	static public String printInput(HashMap<String,Object> input) {
 		// --- read data from input to structures that are easy to use ---
-		boolean json_input = (boolean) input.get("json_input");
-		boolean human_time_format = (boolean) input.get("human_time_format");
+		boolean json_input = getBooleanFrom(input.get("json_input"));
+		boolean human_time_format = getBooleanFrom(input.get("human_time_format"));
 		// read orders hashmap
 		HashMap<String, Object> orders = (HashMap<String, Object>) input.get("orders");
 		long nOrders = orders.size();
@@ -1618,13 +1718,14 @@ public class PurpleOpt {
 			}
 			System.out.println();*/
 			// print courier content manually
-			System.out.println("    lat: " + (Double) courier.get("lat"));
-			System.out.println("    lng: " + (Double) courier.get("lng"));
-			System.out.println("    connected: " + (Boolean) courier.get("connected"));
+			System.out.println("    lat: " + getDoubleFrom(courier.get("lat")));
+			System.out.println("    lng: " + getDoubleFrom(courier.get("lng")));
+			System.out.println("    connected: " + getBooleanFrom(courier.get("connected")));
 			//			System.out.println("    last_ping: " + (Integer) courier.get("last_ping"));
 
 			// print zones
 			System.out.print("    zones: " );
+			assertListInteger(courier.get("zones"));
 			List<Integer> zones = (List<Integer>) courier.get("zones");
 			for(Integer zone: zones) {
 				System.out.print(zone + " ");
@@ -1666,18 +1767,26 @@ public class PurpleOpt {
 			System.out.println("    id:  " + (String) order.get("id"));
 			System.out.println("    status: " + (String) order.get("status"));
 			System.out.println("    gas_type: " + (String) order.get("gas_type"));
-			System.out.println("    gallons: " + (Double) order.get("gallons"));
-			System.out.println("    lat: " + (Double) order.get("lat"));
-			System.out.println("    lng: " + (Double) order.get("lng"));
+			System.out.println("    gallons: " + getDoubleFrom(order.get("gallons")));
+			System.out.println("    lat: " + getDoubleFrom(order.get("lat")));
+			System.out.println("    lng: " + getDoubleFrom(order.get("lng")));
 			if (human_time_format) {
 				System.out.println("    target_time_start: " + (String) order.get("target_time_start"));
 				System.out.println("    target_time_end : " + (String) order.get("target_time_end"));
 			}
 			else {
-				System.out.println("    target_time_start: " + UnixTimeToSimpleDateFormat(((Integer) order.get("target_time_start")).longValue()));
-				System.out.println("    target_time_end : " + UnixTimeToSimpleDateFormat(((Integer) order.get("target_time_end")).longValue()));
+				System.out.println("    target_time_start: " + UnixTimeToSimpleDateFormat(getLongFrom(order.get("target_time_start"))));
+				System.out.println("    target_time_end : " + UnixTimeToSimpleDateFormat(getLongFrom(order.get("target_time_end"))));
 			}
-			System.out.println("    zone_id: " + (Integer) order.get("zone_id"));
+			System.out.println("    zone_id: " + getIntegerFrom(order.get("zone_id")));
+            //print zones
+			System.out.print("    zones: " );
+			assertListInteger(order.get("zones"));
+			List<Integer> orderZones = (List<Integer>) order.get("zones");
+			for(Integer orderZone: orderZones) {
+				System.out.print(orderZone + " ");
+			}
+			System.out.println();
 
 			// print the status time history
 			if (json_input) {
@@ -1689,7 +1798,7 @@ public class PurpleOpt {
 						System.out.print(timekey + ": " + SimpleDateFormatRemoveDate((String) status_times.get(timekey)) +"; ");
 					}
 					else {
-						System.out.print(timekey + ": " + UnixTimeToSimpleDateFormatNoDate(((Integer)status_times.get(timekey)).longValue()) +"; ");
+						System.out.print(timekey + ": " + UnixTimeToSimpleDateFormatNoDate(getLongFrom(status_times.get(timekey))) +"; ");
 					}
 				}
 				if (status_times.isEmpty())
@@ -1704,7 +1813,7 @@ public class PurpleOpt {
 				HashMap<String,Long> status_times = (HashMap<String,Long>) order.get("status_times");
 				System.out.print("       ");
 				for(String timekey: status_times.keySet()) {
-					System.out.print(timekey + ": " + (Long)status_times.get(timekey) +"; ");
+					System.out.print(timekey + ": " + getLongFrom(status_times.get(timekey)) +"; ");
 				}
 				if (status_times.isEmpty())
 					// print an empty line
@@ -1723,16 +1832,21 @@ public class PurpleOpt {
 	@SuppressWarnings("unchecked")
 	static boolean bOrderCanBeServedByCourier(HashMap<String,Object> order, HashMap<String,Object> courier) {
 		// at first the courier should be valid
-		if(!(boolean)courier.get("valid"))
+		if(!getBooleanFrom(courier.get("valid"))) {
 			return false;
-		// meanwhile the order should at the courier's zone
-		else{
-			Integer order_zone = (Integer) order.get("zone");
+        } else { // meanwhile the order should at the courier's zone
+            assertListInteger(courier.get("zones"));
 			List<Integer> courier_zones = (List<Integer>) courier.get("zones");
-			if (courier_zones.contains(order_zone))
-				return true;
-			else
-				return false;
+			
+			assertListInteger(order.get("zones"));
+			List<Integer> zones = (List<Integer>) order.get("zones");
+
+			for (Integer zone: zones) {
+                if (courier_zones.contains(zone)) {
+                    return true;
+                }
+			}
+            return false;
 		}
 	}
 
@@ -1761,4 +1875,67 @@ public class PurpleOpt {
 	        return diff / (absA + absB) < epsilon;
 	    }
 	}
+	
+	/* given an object, return a Long object */ 
+	static Long getLongFrom(Object obj) {
+		if (obj instanceof Long) {
+			return (Long) obj;
+		} else if (obj instanceof Integer) {
+			return ((Integer) obj).longValue();
+		} else if (obj instanceof Double) {
+			return (long) Math.abs((Double) obj);
+		} else {
+			throw new IllegalArgumentException();
+		}
+	}
+	
+	/* given an object, return an Integer object */ 
+	static Integer getIntegerFrom(Object obj) {
+		if (obj instanceof Integer) {
+			return (Integer) obj;
+		} else if (obj instanceof Long) {
+			return ((Long) obj).intValue();
+		} else if (obj instanceof Double) {
+			return (int) Math.abs((Double) obj);
+		} else {
+			throw new IllegalArgumentException();
+		}
+	}
+	
+	/* given an object, return a Double object */ 
+	static Double getDoubleFrom(Object obj) {
+		if (obj instanceof Double) {
+			return (Double) obj;
+		} else if (obj instanceof Long) {
+			return ((Long) obj).doubleValue();
+		} else if (obj instanceof Integer) {
+			return ((Integer) obj).doubleValue();
+		} else {
+			throw new IllegalArgumentException();
+		}
+	}
+	
+	/* given an object, return a Boolean object (true if obj==true or obj~=0) */
+	static Boolean getBooleanFrom(Object obj) {
+		if (obj instanceof Boolean) {
+			return (Boolean) obj;
+		} else if (obj instanceof Long) {
+			return !((Long) obj).equals(0);
+		} else if (obj instanceof Integer) {
+			return !((Long) obj).equals(0);
+		} else {
+			throw new IllegalArgumentException();
+		}
+	}
+	
+	/* throw an exception if the input is not List<Integer>; no exception if the list is empty */
+	static void assertListInteger(Object obj){
+		if (!(obj instanceof List<?>)) {
+			throw new IllegalArgumentException();
+		} else if((!((List<?>) obj).isEmpty())) {
+			if (!(((List<?>) obj).get(0) instanceof Integer))
+				throw new IllegalArgumentException();
+		}
+	}
+	
 }
