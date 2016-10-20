@@ -118,6 +118,7 @@ public class PurpleOpt {
           "etf": [(Integer) estimated finish time; null if cannot be computed],
           "cluster_first_order": [(String) null if not in a cluster; otherwise, the ID of the first order in the cluster, possibly this order itself]
           "status_at_input": (if verbose) [(String) the same status given in the input]
+          "info": [(String) information]
           }
         sorted_order_list: (if verbose) the list of orders internally sorted, given in order_id's
         cluster_list: (if verbose) the list of order clusters, given in order_id's
@@ -287,6 +288,7 @@ public class PurpleOpt {
 			else
 				output_order.put("etf", getTimeOutputInRightFormat(getLongFrom(order.get("etf"))));
 			output_order.put("tag", order.get("tag"));
+			output_order.put("info", order.get("info").toString());	// order.get("info") is a StringBuilder object
 		}
 	}
 	
@@ -310,6 +312,7 @@ public class PurpleOpt {
 					// update both the courier and order
 					courier = (HashMap<String, Object>) couriers.get(courier_id);
 					assignBaseOrder(base_order, courier);
+					appendOrderInfo(base_order, "Assigned to a courier.");
 				}
 			}
 			// the base order has an assigned courier, so obtain the courier
@@ -387,13 +390,21 @@ public class PurpleOpt {
 			
 			HashMap<String,Object> comp_order = it.next();  // get the order to compare with the base_order
 			// if the order satisfies conditions, then move it from the list to the cluster
-			if (bNearbyOrder(base_order,comp_order) && 
-					!bAssignedToDifferentCouriers(base_order,comp_order) && 
-					bClusterSizeFitNew(cluster, comp_order, courier_for_base_order)
-				) 
+			boolean bNearby = bNearbyOrder(base_order,comp_order);
+			boolean bAlreadyAssinged = bAssignedToDifferentCouriers(base_order,comp_order);
+			boolean bMissDeadlines = !bClusterSizeFitNew(cluster, comp_order, courier_for_base_order);
+			if (bNearby) 
 			{
-				cluster.add(comp_order);
-				it.remove();
+				if (bAlreadyAssinged)
+					appendOrderInfo(comp_order, "Close to an order, but not clustered as it was assigned to another courier.");
+				else if (bMissDeadlines)
+					appendOrderInfo(comp_order, "Close to an order, but not clustered due to deadline violation.");
+				else {
+					appendOrderInfo(base_order, "Clustered another order.");
+					appendOrderInfo(comp_order, "Get clustered.");
+					cluster.add(comp_order);
+					it.remove();
+				}
 				
 				// update cluster_first_order for base_order to its own id
 				String base_order_id = (String)base_order.get("id");
@@ -402,6 +413,10 @@ public class PurpleOpt {
 				comp_order.put("cluster_first_order", base_order_id);
 			}
 		}
+		// add info
+		if (cluster.size() == maxNumOrdersPerCluster)
+			appendOrderInfo(base_order,"Clustered " + maxNumOrdersPerCluster + " other orders. Max cluster size reached");
+		
 		return cluster;
 	}
 	
@@ -503,6 +518,8 @@ public class PurpleOpt {
 			// filling cluster_first_order;
 			order.put("cluster_first_order", null);
 			order_info.put("cluster_first_order", null);
+			// filling info
+			order.put("info", new StringBuilder());
 			// filling status if verbose
 			if (verbose_output)
 				order_info.put("status_at_input", order.get("status"));
@@ -1164,6 +1181,7 @@ public class PurpleOpt {
 				for(String order_id: (List<String>)courier.get("assigned_orders")){
 					HashMap<String, Object> order = (HashMap<String, Object>) orders.get(order_id);
 					order.put("cluster", false);
+					appendOrderInfo(order, "Assigned previously. Its courier is invalid, not clusterable.");
 				}
 			}
 			// else, the courier is valid
@@ -1172,10 +1190,18 @@ public class PurpleOpt {
 				int listSize = assigned_order_list.size();
 				// but if the courier has more than two manager assigned orders, then we don't know which is the last one
 				// if the courier has only one order, then it can be clustered
-				for (int i = 0; i < (listSize - 1); i++) // those orders before the last cannot be clustered 
-					((HashMap<String, Object>) orders.get(assigned_order_list.get(i))).put("cluster", false);
+				for (int i = 0; i < (listSize - 1); i++) // those orders before the last cannot be clustered
+				{
+					HashMap<String, Object> order = (HashMap<String, Object>) orders.get(assigned_order_list.get(i));
+					order.put("cluster", false);
+					appendOrderInfo(order, "Assigned previously. Not its couriers' last order in queue, not clusterable");
+				}
 				if (listSize >= 1) // the last order can be clustered
-					((HashMap<String, Object>) orders.get(assigned_order_list.get(listSize-1))).put("cluster", true);
+				{
+					HashMap<String, Object> order = (HashMap<String, Object>) orders.get(assigned_order_list.get(listSize-1));
+					order.put("cluster", true);
+					appendOrderInfo(order, "Assigned previously. As last order of its courier, can cluster other orders.");
+				}
 			}
 		}
 		// every unassigned order can be clustered
@@ -1183,6 +1209,7 @@ public class PurpleOpt {
 			HashMap<String, Object> order = (HashMap<String, Object>)orders.get(order_key);
 			if((order.get("status")).equals("unassigned")){
 				order.put("cluster", true);
+				appendOrderInfo(order, "New order, can cluster other orders or be clustered.");
 			}
 		}
 		// ensure every order has a field "cluster", to avoid future nullPointerException
@@ -1591,10 +1618,14 @@ public class PurpleOpt {
 
 		/* tag order with "late", "urgent" or "normal" */
 		if(min_urgency_ratio > 1)
+		{
 			order.put("tag", "late");
+			appendOrderInfo(order, "Late.");
+		}
 		else if(min_urgency_ratio >= urgencyThreshold || order_deadline - currTime <= minsUrgencyThreshold * 60) {
 			order.put("tag", "urgent");
 			order.put("min_urgency_ratio", min_urgency_ratio);
+			appendOrderInfo(order, "Urgent.");
 		}
 		else {
 			order.put("tag", "normal");
@@ -1936,6 +1967,11 @@ public class PurpleOpt {
 			if (!(((List<?>) obj).get(0) instanceof Integer))
 				throw new IllegalArgumentException();
 		}
+	}
+	
+	/* given an order (object), append string to its "info" field */
+	static void appendOrderInfo(HashMap<String,Object>order, String str){
+		((StringBuilder) order.get("info")).append(" "+str);
 	}
 	
 }
