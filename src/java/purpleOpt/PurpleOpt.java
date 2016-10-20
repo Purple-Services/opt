@@ -63,6 +63,8 @@ public class PurpleOpt {
 	/* Google API key */
 	// static  google_api_key = "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE"; // Wotao's key CAUTION, disable for release
 	static String google_api_key = "AIzaSyCd_XdJsSsStXf1z8qCWITuAsppr5FoHao"; // Purple's key
+	/* the radius used to test same-location orders */
+	static double sameLocOrderRadius = 0.0002; // this value roughly equals ~10 yards; NOTE: the actual distance depends on the latitude of the city
 	/* the radius used to test nearby orders */
 	static double nearbyOrderRadius = 0.001; // this value roughly equals a street block; NOTE: the actual distance depends on the latitude of the city
 	/* average servicing minutes */
@@ -118,6 +120,7 @@ public class PurpleOpt {
           "etf": [(Integer) estimated finish time; null if cannot be computed],
           "cluster_first_order": [(String) null if not in a cluster; otherwise, the ID of the first order in the cluster, possibly this order itself]
           "status_at_input": (if verbose) [(String) the same status given in the input]
+          "info": [(String) information]
           }
         sorted_order_list: (if verbose) the list of orders internally sorted, given in order_id's
         cluster_list: (if verbose) the list of order clusters, given in order_id's
@@ -178,7 +181,7 @@ public class PurpleOpt {
 				throw new IllegalArgumentException();
 		}
 		
-		// initialize output HashMap
+		// initialize an empty output HashMap
 		LinkedHashMap<String,Object> outHashMap = new LinkedHashMap<>();
 
 		if(!simulation_mode){
@@ -190,27 +193,26 @@ public class PurpleOpt {
 		// obtain orders from the input
 		HashMap<String, Object> orders = (HashMap<String, Object>) input.get("orders");
 
-		/* return an empty hashmap if there is no unassigned orders
-		 * if there is unassigned order, then remove completed and cancelled ones
-		 */
+		// return with the empty hashmap if there is no unassigned orders
 		if (!bExistUnassignedOrder(orders))
 			return outHashMap;
 		
-		// filter only incomplete orders
+		// remove all completed and cancelled orders; keep only incomplete orders
 		filterIncompleteOrders(orders);
 		
-		// initialize output HashMap
+		// initialize output HashMap; add some fields to both output and input "orders" for future use
 		outputInitialize(outHashMap, orders);
 
 		// obtain couriers from the input
 		HashMap<String, Object> couriers = (HashMap<String, Object>) input.get("couriers");
 
-		/* for each courier add a field "valid" (true or false), 
-		 *                  add a field "assigned_orders" with his orders in the right precedence
+		/* for each courier add a field "valid" (true or false); true means we can figure out when/where he will finish his last order, or is currently free, and thus we can assign him new orders; 
+		 *                  add a field "assigned_orders" with his orders in the right ordering: servicing < enroute < (accepted or assigned), regardless "valid"
 		 */
 		courierValidation(couriers, orders);
 
-		// for each order, add a field "cluster" (true or false)
+		// for each order, add a field "cluster" (true or false); it gets false if the order is assigned to an invalid courier, or to a valid courier but not its last order
+		// if false, then the order will not be clustered with any other order(s) with the only exception that it is at the same-location with another order 
 		clusterValidation(couriers, orders);
 
 		/* compute finish status of valid couriers
@@ -221,7 +223,7 @@ public class PurpleOpt {
 		// Sort all incomplete orders ("unassigned", "assigned", "accepted", "enroute", "servicing")
 		List<HashMap<String, Object>> sorted_orders = sortIncompleteOrders(orders,couriers,currTime, outHashMap);
 
-		// save sorted_order_list if verbose
+		// save sorted_order_list if the output is verbose
 		if (verbose_output){
 			// copy sorted_orders to sorted_list for future print
 			List<String> sorted_order_list = getOrderIdListFromListOfOrders(sorted_orders);
@@ -229,7 +231,7 @@ public class PurpleOpt {
 			outHashMap.put("sorted_order_list", sorted_order_list);
 		}
 		
-		// initialize output cluster_list
+		// initialize an empty cluster_list for output
 		List<List<String>> cluster_list = new ArrayList<>();
 		
 		// cluster orders and assign orders/clusters to couriers
@@ -287,17 +289,18 @@ public class PurpleOpt {
 			else
 				output_order.put("etf", getTimeOutputInRightFormat(getLongFrom(order.get("etf"))));
 			output_order.put("tag", order.get("tag"));
+			output_order.put("info", order.get("info").toString());	// order.get("info") is a StringBuilder object
 		}
 	}
 	
 	@SuppressWarnings({ "unchecked"})
 	static void assignOrders(List<List<String>> cluster_list, HashMap<String, Object> orders, List<HashMap<String, Object>>sorted_orders, HashMap<String, Object>couriers, long currTime){
 		while (!sorted_orders.isEmpty()) {
-			// initialize courier_for_base_order
+			// initialize an empty(unknown) courier
 			HashMap<String,Object> courier = null;
-			// get an iterator
+			// get an iterator of the list of sorted orders
 			Iterator<HashMap<String,Object>> it = sorted_orders.listIterator();
-			// move the first order from the list to the cluster, and call it the base order
+			// call the first order from the list the base order
 			HashMap<String,Object> base_order = it.next();
 			String courier_id = (String)base_order.get("courier_id");
 			
@@ -310,21 +313,23 @@ public class PurpleOpt {
 					// update both the courier and order
 					courier = (HashMap<String, Object>) couriers.get(courier_id);
 					assignBaseOrder(base_order, courier);
+					appendOrderInfo(base_order, "Assigned to a courier.");
 				}
 			}
-			// the base order has an assigned courier, so obtain the courier
+			// the base order has been assigned to a courier, so obtain the courier
 			else
 				courier = (HashMap<String, Object>) couriers.get(courier_id);
 			
-			// ensure that the base order has been assigned to a "valid" courier; if not, do nothing
-			if((courier!=null) && getBooleanFrom(courier.get("valid"))){
-				// do clustering, which will remove the base or other orders from sorted_orders
-				List<HashMap<String, Object>> cluster = doClustering(base_order, it, couriers, currTime);
+			// ensure that the base order has been assigned a courier; otherwise, do nothing
+			if(courier!=null){
+				// initialize an empty cluster
+				List<HashMap<String, Object>> cluster = new ArrayList<HashMap<String, Object>>();
+				// do clustering, which will remove the base or all clustered orders from the list of sorted_orders
+				cluster = doClustering(base_order, it, couriers, currTime);
 				// record the cluster for output
 				cluster_list.add(getOrderIdListFromListOfOrders(cluster));
-
+				// if there are new order(s) in the cluster, assign them to the courier
 				if (cluster.size()>1) {
-					// assign the non-base orders in the cluster to the courier
 					assignCluster(courier, cluster);
 				}
 			}
@@ -374,7 +379,7 @@ public class PurpleOpt {
 	
 	@SuppressWarnings("unchecked")
 	static List<HashMap<String, Object>> doClustering(HashMap<String, Object> base_order, Iterator<HashMap<String,Object>> it, HashMap<String, Object> couriers, long currTime){
-		// do clustering
+		// initialize an empty cluster
 		List<HashMap<String, Object>> cluster = new ArrayList<>();
 		// obtain base_order's courier
 		HashMap<String, Object> courier_for_base_order = (HashMap<String, Object>) couriers.get((String) base_order.get("courier_id"));
@@ -383,25 +388,57 @@ public class PurpleOpt {
 		// remove the base order
 		it.remove();
 		// if the base_order can be clustered, then go through the remaining list for nearby orders while the cluster size is not exceeding the limit
-		while (it.hasNext() && getBooleanFrom(base_order.get("cluster")) && cluster.size() < maxNumOrdersPerCluster) {
+		while (it.hasNext()) {
 			
 			HashMap<String,Object> comp_order = it.next();  // get the order to compare with the base_order
 			// if the order satisfies conditions, then move it from the list to the cluster
-			if (bNearbyOrder(base_order,comp_order) && 
-					!bAssignedToDifferentCouriers(base_order,comp_order) && 
-					bClusterSizeFitNew(cluster, comp_order, courier_for_base_order)
-				) 
+			boolean bCourierNotValid = (!getBooleanFrom(courier_for_base_order.get("valid"))); 
+			boolean bBaseOrderNotClusterable = (!getBooleanFrom(base_order.get("cluster")));
+			boolean bMaxClusterSizeReached = (cluster.size() >= maxNumOrdersPerCluster);
+			boolean bSameLoc = bSameLocOrder(base_order,comp_order);
+			boolean bNearby = (bSameLoc || bNearbyOrder(base_order,comp_order));
+			boolean bAlreadyAssinged = bAssignedToDifferentCouriers(base_order,comp_order);
+			boolean bMissDeadlines = !bClusterSizeFitNew(cluster, comp_order, courier_for_base_order);
+			
+			// only nearby orders are considered
+			if (bNearby)
 			{
-				cluster.add(comp_order);
-				it.remove();
+				if (bSameLoc)
+					appendOrderInfo(comp_order, "Same-loc as another order.");
+				else
+					appendOrderInfo(comp_order, "Nearby another order, not same-loc.");
 				
-				// update cluster_first_order for base_order to its own id
-				String base_order_id = (String)base_order.get("id");
-				base_order.put("cluster_first_order", base_order_id);
-				// update cluster_first_order for comp_order to base_order's ID
-				comp_order.put("cluster_first_order", base_order_id);
+				if (bAlreadyAssinged) // skip if already assigned to another courier 
+					appendOrderInfo(comp_order, "Not clustered as it was already assigned to a different courier.");
+				else if ((!bSameLoc) && bMaxClusterSizeReached) // unless same-loc, ensure max cluster size is not reached yet
+					appendOrderInfo(comp_order, "Not clustered since max cluster size is reached.");
+				else if ((!bSameLoc) && bBaseOrderNotClusterable) // unless same-loc, ensure base_order is clusterable
+					appendOrderInfo(comp_order, "Not clustered since base_order is not clusterable.");
+				else if ((!bSameLoc) && bCourierNotValid) // unless same-loc, ensure base_order's courier is valid
+					appendOrderInfo(comp_order, "Not clustered since base_order's courier is invalid.");
+				else if ((!bSameLoc) && bMissDeadlines) // unless same-loc, ensure deadline won't violated
+					appendOrderInfo(comp_order, "Not clustered due to deadline violation.");
+				else {
+					// Okay to cluster!
+					appendOrderInfo(base_order, "Clustered an order.");
+					appendOrderInfo(comp_order, "Get clustered.");
+					// add to cluster
+					cluster.add(comp_order);
+					// get the base_order's id
+					String base_order_id = (String)base_order.get("id");
+					// update base_order->cluster_first_order to its own id
+					base_order.put("cluster_first_order", base_order_id);
+					// update comp_order->cluster_first_order to base_order's ID
+					comp_order.put("cluster_first_order", base_order_id);
+					// remove the comp_order for the list of sorted orders
+					it.remove();
+				}
 			}
 		}
+		// reaching max cluster size, add info
+		if (cluster.size() >= maxNumOrdersPerCluster)
+			appendOrderInfo(base_order,"Clustered " + (cluster.size()-1) + " other orders. Max cluster size " + maxNumOrdersPerCluster + " reached");
+		
 		return cluster;
 	}
 	
@@ -483,7 +520,7 @@ public class PurpleOpt {
 		return out_list;
 	}
 
-	// Initialize the output LinkedHashMap
+	// Initialize the output LinkedHashMap and add some fields to both this output and the input HashMap "order"
 	@SuppressWarnings("unchecked")
 	static void outputInitialize(LinkedHashMap<String, Object> outHashMap, HashMap<String, Object> orders){
 		for(String order_key: orders.keySet()){
@@ -503,6 +540,8 @@ public class PurpleOpt {
 			// filling cluster_first_order;
 			order.put("cluster_first_order", null);
 			order_info.put("cluster_first_order", null);
+			// filling info
+			order.put("info", new StringBuilder());
 			// filling status if verbose
 			if (verbose_output)
 				order_info.put("status_at_input", order.get("status"));
@@ -1059,6 +1098,17 @@ public class PurpleOpt {
 				getDoubleFrom(order2.get("lat")), getDoubleFrom(order2.get("lng")));
 	}
 
+	// determine whether two orders are at the same location or not
+	static boolean bSameLocOrderLatLng(Double lat1, Double lng1, Double lat2, Double lng2) {
+		return googleDistanceZero(lat1, lng1, lat2, lng2, sameLocOrderRadius);
+	}
+	
+	/* decide whether two orders are considered same-location */
+	static boolean bSameLocOrder(HashMap<String,Object> order1, HashMap<String,Object> order2) {
+		return bSameLocOrderLatLng(getDoubleFrom(order1.get("lat")), getDoubleFrom(order1.get("lng")),
+				getDoubleFrom(order2.get("lat")), getDoubleFrom(order2.get("lng")));
+	}
+
 	/* decide whether a courier has a valid location so it can take orders */
 	public static boolean bCourierValidLocation(HashMap<String, Object> courier){
 		// get the courier connection status
@@ -1073,12 +1123,12 @@ public class PurpleOpt {
 
 	}
 
-	/* get courier's assigned_order_list */
+	/* get courier's list of assigned orders (except completed and cancelled orders) */
 	@SuppressWarnings("unchecked")
 	static List<String> getAssignedOrderList(HashMap<String, Object>courier, final HashMap<String, Object>orders){
 		String courier_id = (String)courier.get("id");
 		List<String> assigned_order_list_of_courier = new ArrayList<String>();
-		// get this courier's incomplete assigned orders
+		// get this courier's assigned orders
 		for(String order_id: orders.keySet()){
 			HashMap<String, Object> order = (HashMap<String, Object>)orders.get(order_id);
 			String status = (String) order.get("status");
@@ -1090,6 +1140,7 @@ public class PurpleOpt {
 			}
 		}
 		
+		// sort the orders by their status: servicing < enroute < (accepted or assigned)
 		Collections.sort(assigned_order_list_of_courier, new Comparator<String>() {
 			public int compare(String o1, String o2) {
 				HashMap<String, Object> order1 = (HashMap<String, Object>) orders.get(o1);
@@ -1097,7 +1148,10 @@ public class PurpleOpt {
 				String o1_status = (String)order1.get("status");
 				String o2_status = (String)order2.get("status");
 				if ((o1_status.equals("accepted") || o1_status.equals("assigned")) && (o2_status.equals("servicing") || o2_status.equals("enroute")))
-					// give priority to working order over others
+					// give priority to a working order over a non-standing order
+					return 1;
+				else if (o1_status.equals("enroute") && o2_status.equals("servicing"))
+					// give priority to a servicing order over an enroute order
 					return 1;
 				else
 					return -1;
@@ -1111,7 +1165,7 @@ public class PurpleOpt {
 	 */
 	@SuppressWarnings("unchecked")
 	static void bCourierValid(HashMap<String, Object> courier, HashMap<String, Object> orders){
-		// get assigned order list for this courier
+		// get assigned order list for this courier, ordered by status as servicing < enroute < (accepted or assigned)
 		List<String> assigned_order_list = getAssignedOrderList(courier, orders);
 		// add the list assigned_orders to each courier
 		courier.put("assigned_orders", assigned_order_list);
@@ -1154,7 +1208,7 @@ public class PurpleOpt {
 			courier.put("valid", false);
 	}
 
-	// for each order, add a field "cluster" (true for valid orders or false for invalid orders)
+	// for each order, add a field "cluster" (true or false); false if it is assigned to an invalid courier, or to a valid courier but not its last order
 	@SuppressWarnings("unchecked")
 	static void clusterValidation(HashMap<String, Object>couriers, HashMap<String, Object>orders){
 		for(String courier_key: couriers.keySet()){
@@ -1164,6 +1218,7 @@ public class PurpleOpt {
 				for(String order_id: (List<String>)courier.get("assigned_orders")){
 					HashMap<String, Object> order = (HashMap<String, Object>) orders.get(order_id);
 					order.put("cluster", false);
+					appendOrderInfo(order, "Assigned previously. Its courier is invalid, not clusterable.");
 				}
 			}
 			// else, the courier is valid
@@ -1172,10 +1227,18 @@ public class PurpleOpt {
 				int listSize = assigned_order_list.size();
 				// but if the courier has more than two manager assigned orders, then we don't know which is the last one
 				// if the courier has only one order, then it can be clustered
-				for (int i = 0; i < (listSize - 1); i++) // those orders before the last cannot be clustered 
-					((HashMap<String, Object>) orders.get(assigned_order_list.get(i))).put("cluster", false);
+				for (int i = 0; i < (listSize - 1); i++) // those orders before the last cannot be clustered
+				{
+					HashMap<String, Object> order = (HashMap<String, Object>) orders.get(assigned_order_list.get(i));
+					order.put("cluster", false);
+					appendOrderInfo(order, "Assigned previously. Not its couriers' last order in queue, not clusterable");
+				}
 				if (listSize >= 1) // the last order can be clustered
-					((HashMap<String, Object>) orders.get(assigned_order_list.get(listSize-1))).put("cluster", true);
+				{
+					HashMap<String, Object> order = (HashMap<String, Object>) orders.get(assigned_order_list.get(listSize-1));
+					order.put("cluster", true);
+					appendOrderInfo(order, "Assigned previously. As last order of its courier, can cluster other orders.");
+				}
 			}
 		}
 		// every unassigned order can be clustered
@@ -1183,6 +1246,7 @@ public class PurpleOpt {
 			HashMap<String, Object> order = (HashMap<String, Object>)orders.get(order_key);
 			if((order.get("status")).equals("unassigned")){
 				order.put("cluster", true);
+				appendOrderInfo(order, "New order, can cluster other orders or be clustered.");
 			}
 		}
 		// ensure every order has a field "cluster", to avoid future nullPointerException
@@ -1591,10 +1655,14 @@ public class PurpleOpt {
 
 		/* tag order with "late", "urgent" or "normal" */
 		if(min_urgency_ratio > 1)
+		{
 			order.put("tag", "late");
+			appendOrderInfo(order, "Late.");
+		}
 		else if(min_urgency_ratio >= urgencyThreshold || order_deadline - currTime <= minsUrgencyThreshold * 60) {
 			order.put("tag", "urgent");
 			order.put("min_urgency_ratio", min_urgency_ratio);
+			appendOrderInfo(order, "Urgent.");
 		}
 		else {
 			order.put("tag", "normal");
@@ -1936,6 +2004,11 @@ public class PurpleOpt {
 			if (!(((List<?>) obj).get(0) instanceof Integer))
 				throw new IllegalArgumentException();
 		}
+	}
+	
+	/* given an order (object), append string to its "info" field */
+	static void appendOrderInfo(HashMap<String,Object>order, String str){
+		((StringBuilder) order.get("info")).append(" "+str);
 	}
 	
 }
