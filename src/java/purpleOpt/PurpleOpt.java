@@ -62,7 +62,7 @@ public class PurpleOpt {
 	static boolean bPrint = false; // CAUTION, use false for release
 	/* Google API key */
 	// static  google_api_key = "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE"; // Wotao's key CAUTION, disable for release
-	static String google_api_key = "AIzaSyCd_XdJsSsStXf1z8qCWITuAsppr5FoHao"; // Purple's key
+	static String google_api_key = System.getProperty("AUTO_ASSIGN_GOOGLE_SERVER_API_KEY"); // Purple's key
 	/* the radius used to test nearby orders */
 	static double nearbyOrderRadius = 0.001; // this value roughly equals a street block; NOTE: the actual distance depends on the latitude of the city
 	/* average servicing minutes */
