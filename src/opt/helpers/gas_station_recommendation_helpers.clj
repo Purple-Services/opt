@@ -14,7 +14,7 @@
   (clojure.java.io/resource "gas-stations/stations.json"))
 
 (def mapquest-box-step 2)
-(def google-api-key config/dashboard-google-browser-api-key) ;; comment: does it exist in Chris profile? If you are using mine, you might forget updating it to the company one when putting into production
+(def google-api-key config/auto-assign-google-server-api-key)
 (def gas-stations-atom (atom {}))
 (def avg-gasprice-reg-atom (atom 0))
 (defn gen-grids-helper [br-lat br-lng tl-lat tl-lng og-lng coll] ;; please define the abbr and add some English to explain what you do here
