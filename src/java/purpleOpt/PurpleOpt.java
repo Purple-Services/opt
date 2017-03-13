@@ -64,7 +64,9 @@ public class PurpleOpt {
 	// static  google_api_key = "AIzaSyAFGyFvaKvXQUKzRh9jQaUwQnHnkiHDUCE"; // Wotao's key CAUTION, disable for release
 	static String google_api_key = System.getProperty("AUTO_ASSIGN_GOOGLE_SERVER_API_KEY"); // Purple's key
 	/* the radius used to test nearby orders */
-	static double nearbyOrderRadius = 0.001; // this value roughly equals a street block; NOTE: the actual distance depends on the latitude of the city
+	static double nearbyOrderRadius = 0.023; // 1.5 miles
+    // OLD VALUE below:
+    // 0.001; // this value roughly equals a street block; NOTE: the actual distance depends on the latitude of the city
 	/* average servicing minutes */
 	static long mins7_5GallonOrder = 18; // 18 minutes for 7.5 gallons
 	static long mins10GallonOrder = 20; // 20 minutes for 10 gallons
